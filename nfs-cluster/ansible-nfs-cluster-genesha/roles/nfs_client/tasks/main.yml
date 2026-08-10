@@ -1,0 +1,61 @@
+---
+- name: Install nfs-common
+  package:
+    name: nfs-common
+    state: present
+
+- name: Create mount point directory
+  file:
+    path: "{{ nfs_mount_point }}"
+    state: directory
+    mode: '0755'
+
+- name: Wait for the NFS VIP to be reachable
+  wait_for:
+    host: "{{ nfs_vip }}"
+    port: 2049
+    timeout: 120
+  failed_when: false
+
+- name: Mount NFS share and add to fstab
+  mount:
+    path: "{{ nfs_mount_point }}"
+    src: "{{ nfs_vip }}:{{ nfs_export_path }}"
+    fstype: nfs4
+    opts: "{{ nfs_mount_opts | default('defaults,_netdev') }}"
+    state: mounted
+  failed_when: false
+
+- name: Verify mount with df -h
+  command: df -h {{ nfs_mount_point }}
+  register: mount_verify
+  changed_when: false
+  failed_when: false
+
+- name: Display mount status
+  debug:
+    var: mount_verify.stdout_lines
+  failed_when: false
+
+# ==========================================
+# Deploy Kubernetes Dynamic Storage Provisioner
+# ==========================================
+- name: Generate Kubernetes NFS Provisioner manifest
+  template:
+    src: k8s-nfs-provisioner.yaml.j2
+    dest: /tmp/k8s-nfs-provisioner.yaml
+    owner: root
+    group: root
+    mode: '0644'
+  when:
+    - install_k8s_nfs_provisioner | default(true)
+    - inventory_hostname == groups['nfs_clients'][0]
+  failed_when: false
+
+- name: Apply Kubernetes NFS Provisioner manifest
+  command: kubectl apply -f /tmp/k8s-nfs-provisioner.yaml
+  when:
+    - install_k8s_nfs_provisioner | default(true)
+    - inventory_hostname == groups['nfs_clients'][0]
+  failed_when: false
+  changed_when: false

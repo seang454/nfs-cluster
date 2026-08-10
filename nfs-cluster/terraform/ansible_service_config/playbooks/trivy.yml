@@ -1,6 +1,0 @@
----
-- name: Configure Trivy scanner
-  hosts: trivy
-  become: true
-  roles:
-    - trivy

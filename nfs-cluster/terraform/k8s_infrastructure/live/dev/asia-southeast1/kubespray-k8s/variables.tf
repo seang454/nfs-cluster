@@ -37,6 +37,12 @@ variable "control_plane_count" {
 variable "worker_count" {
   description = "Number of Kubernetes worker nodes."
   type        = number
+  default     = 2
+}
+
+variable "nfs_count" {
+  description = "Number of NFS storage nodes."
+  type        = number
   default     = 3
 }
 
@@ -50,6 +56,36 @@ variable "worker_name_prefix" {
   description = "Kubespray inventory hostname prefix for worker nodes."
   type        = string
   default     = "worker"
+}
+
+variable "nfs_name_prefix" {
+  description = "Inventory hostname prefix for NFS storage nodes."
+  type        = string
+  default     = "haproxy"
+}
+
+variable "nfs_machine_types" {
+  description = "Machine types for NFS storage nodes."
+  type        = list(string)
+  default     = ["e2-standard-2"]
+}
+
+variable "nfs_boot_disk_size_gb" {
+  description = "NFS node boot disk size in GB."
+  type        = number
+  default     = 50
+}
+
+variable "nfs_data_disk_size_gb" {
+  description = "NFS node data disk size in GB for Ceph OSD."
+  type        = number
+  default     = 50
+}
+
+variable "nfs_inventory_path" {
+  description = "Relative path where the generated NFS cluster inventory file is written."
+  type        = string
+  default     = "../../../../../ansible-nfs-cluster-genesha/inventory/hosts.ini"
 }
 
 variable "zone" {

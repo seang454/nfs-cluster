@@ -1,19 +1,19 @@
-project_id = "project-ef47043f-b178-4cb8-992"
+project_id = "project-469c6b81-55a1-4508-830"
 region     = "asia-southeast1"
 zone       = "asia-southeast1-a"
 
 # Kubespray cluster size.
-# For stacked etcd HA, 1 or 3 control plane nodes is usually better than 2.
-# Kubespray strictly requires an odd number of etcd nodes (which we stack on the control plane)
-control_plane_count = 1
-worker_count        = 3
+control_plane_count = 3
+worker_count        = 2
+nfs_count           = 3
 
 cluster_name         = "kubespray"
 instance_name_prefix = "k8s"
 
-# Kubespray inventory names become master01, master02, worker01, worker02, ...
+# Inventory name prefixes
 control_plane_name_prefix = "master"
 worker_name_prefix        = "worker"
+nfs_name_prefix           = "haproxy"
 
 # Terraform spreads nodes across these zones in order.
 zones = [
@@ -36,24 +36,24 @@ blocked_regions = []
 # user runs Terraform after `gcloud auth application-default login`.
 gcp_adc_file = ""
 
-# Optional explicit Linux/WSL path. "~" dynamically means the current user:
-# gcp_adc_file = "~/.config/gcloud/application_default_credentials.json"
-
 # Machine types are matched by node index.
-# If there are more nodes than values, Terraform reuses the last value.
+# e2-medium (1 vCPU, 4GB RAM) allows all 8 nodes (3 master + 2 worker + 3 nfs) to fit within GCP's 12 vCPU global quota (8 vCPUs total).
 control_plane_machine_types = [
-  "n2d-standard-2"
+  "e2-medium"
 ]
 
 worker_machine_types = [
-  "e2-standard-2"
+  "e2-medium"
+]
+
+nfs_machine_types = [
+  "e2-medium"
 ]
 
 fallback_machine_types = [
-  "n2d-standard-2",
-  "e2-highcpu-2",
-  "e2-highmem-2",
-  "n4-standard-2"
+  "e2-medium",
+  "e2-standard-2",
+  "n2d-standard-2"
 ]
 
 random_resource_type = [
@@ -67,6 +67,8 @@ desired_status = "RUNNING"
 image                           = "ubuntu-os-cloud/ubuntu-2404-lts-amd64"
 control_plane_boot_disk_size_gb = 50
 worker_boot_disk_size_gb        = 50
+nfs_boot_disk_size_gb           = 50
+nfs_data_disk_size_gb           = 50
 boot_disk_type                  = "pd-balanced"
 
 network    = "default"
@@ -76,20 +78,16 @@ subnetwork = null
 ssh_user            = "seang"
 ssh_public_key_path = "~/.ssh/id_rsa.pub"
 
-# SSH/private key values written into the Kubespray inventory.
-# Leave ansible_user empty to reuse ssh_user above.
+# SSH/private key values written into the inventories.
 ansible_user                 = ""
 ansible_ssh_private_key_file = "~/.ssh/id_rsa"
 ansible_python_interpreter   = "/usr/bin/python3"
 ansible_ssh_extra_args       = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 
-# Terraform writes the real VM IPs into this Kubespray inventory after apply.
-kubespray_inventory_path = "../../../../../ansible_kubespray_k8s/kubespray/inventory/sample/inventory.ini"
-
-# Terraform also writes the VM IPs into the ansible_kubespray_k8s main inventory
-# after apply, so Ansible playbooks (zsh setup, pre-flight checks, etc.) always
-# have fresh node IPs without any manual editing.
-ansible_inventory_path = "../../../../../ansible_kubespray_k8s/inventory.ini"
+# Terraform writes the real VM IPs into Kubespray & Ansible inventories after apply.
+kubespray_inventory_path   = "../../../../../ansible_kubespray_k8s/kubespray/inventory/sample/inventory.ini"
+ansible_inventory_path     = "../../../../../ansible_kubespray_k8s/inventory.ini"
+nfs_inventory_path         = "../../../../../../ansible-nfs-cluster-genesha/inventory/hosts.ini"
 
 # For learning, this is open. For real use, restrict SSH/API to your public IP CIDR.
 ssh_source_ranges            = ["0.0.0.0/0"]

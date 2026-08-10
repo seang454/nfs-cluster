@@ -27,6 +27,20 @@ output "worker_nodes" {
   ]
 }
 
+output "nfs_nodes" {
+  description = "NFS / Ceph storage node details."
+  value = [
+    for node in local.nfs_nodes : {
+      name          = node.name
+      instance_name = node.instance_name
+      zone          = node.zone
+      machine_type  = node.machine_type
+      public_ip     = google_compute_address.this[node.name].address
+      private_ip    = google_compute_instance.this[node.name].network_interface[0].network_ip
+    }
+  ]
+}
+
 output "all_nodes" {
   description = "All Kubernetes node details keyed by Kubespray inventory hostname."
   value = {

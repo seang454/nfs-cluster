@@ -1,0 +1,89 @@
+---
+# ==========================================
+# CENTRALIZED VARIABLES FOR PRODUCTION NFS CLUSTER
+# ==========================================
+# Change these values to dynamically update
+# ALL roles and configurations at once.
+#
+# ⚠️  = Changing this AFTER initial setup will BREAK the cluster
+# 🔴 = Changing this incorrectly will cause IMMEDIATE failure
+# 🟡 = Safe to change, but must match your environment
+# 🟢 = Safe to change anytime
+# ==========================================
+
+# ------------------------------------------
+# NFS Configuration
+# ------------------------------------------
+
+# 🔴 CRITICAL: Private IP of primary NFS storage node (haproxy-1)
+nfs_vip: "10.140.0.5"
+
+# ⚠️  DO NOT CHANGE after Kubernetes PersistentVolumes reference this path.
+#    If you change this, every PV/PVC in your cluster will lose connection
+#    to storage and all pods using NFS will crash with mount errors.
+nfs_export_path: "/data"
+
+# 🟢 Safe to change. Local mount point on client nodes.
+nfs_mount_point: "/mnt/nfs"
+
+# 🟡 Change with caution. Mount options for high availability:
+#    - "soft"  = NFS returns errors to apps if server is unreachable (safer)
+#    - "_netdev" = Wait for network before mounting at boot time
+#    - "timeo=300" = Timeout in tenths of a second (30 seconds)
+nfs_mount_opts: "defaults,_netdev,soft,timeo=300"
+
+# 🟢 Safe to change. The NFS export ID number (must be unique per export).
+nfs_export_id: 1
+
+# ------------------------------------------
+# Ceph Configuration
+# ------------------------------------------
+
+# ⚠️  DO NOT CHANGE after the cluster is deployed.
+ceph_release: "quincy"
+
+# ⚠️  DO NOT CHANGE after CephFS is created.
+ceph_fsname: "cephfs_nfs"
+
+# ⚠️  DO NOT CHANGE after CephFS is created.
+ceph_pool_data: "cephfs_data"
+ceph_pool_metadata: "cephfs_metadata"
+
+# 🔴 CRITICAL: Must be a RAW, UNFORMATTED, EMPTY disk device.
+#    Secondary 50GB persistent disk attached via Terraform (/dev/sdb).
+ceph_osd_disk: "/dev/sdb"
+
+# ------------------------------------------
+# Pacemaker / Corosync & Fencing (STONITH)
+# ------------------------------------------
+
+# ⚠️  DO NOT CHANGE after the cluster is created.
+pacemaker_cluster_name: "nfs-ha-cluster"
+
+# 🔴 SECURITY NOTICE: Encrypt this with `ansible-vault encrypt_string` in production!
+pacemaker_hacluster_password: "changeme_in_production"
+
+# 🔴 Subnet CIDR mask (e.g., "24" for /24 subnets)
+nfs_vip_cidr: "24"
+
+# 🔴 Primary network interface name on GCP Ubuntu 24.04 VMs ("ens4")
+nfs_vip_interface: "ens4"
+
+# 🟡 Set to true to enable STONITH fencing in production (requires fence_gce agent on GCP)
+enable_stonith: false
+
+# ------------------------------------------
+# Firewall & Security Settings
+# ------------------------------------------
+
+# 🟡 Set to true to keep UFW disabled by default (simpler for lab/dev)
+disable_firewall: true
+
+# ------------------------------------------
+# Kubernetes Dynamic Storage Integration
+# ------------------------------------------
+
+# 🟢 Deploy NFS Subdir External Provisioner for Kubernetes RWX PVCs
+install_k8s_nfs_provisioner: true
+k8s_storage_class_name: "nfs-client"
+k8s_storage_class_default: true

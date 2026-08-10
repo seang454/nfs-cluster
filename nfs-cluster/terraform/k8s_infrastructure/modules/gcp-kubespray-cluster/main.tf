@@ -57,6 +57,7 @@ locals {
       region            = replace(local.effective_zones[index % length(local.effective_zones)], "/-[a-z]$/", "")
       machine_type      = var.control_plane_machine_types[min(index, length(var.control_plane_machine_types) - 1)]
       boot_disk_size_gb = var.control_plane_boot_disk_size_gb
+      has_secondary_disk= false
     }
   ]
 
@@ -71,11 +72,28 @@ locals {
       region            = replace(local.effective_zones[(var.control_plane_count + index) % length(local.effective_zones)], "/-[a-z]$/", "")
       machine_type      = var.worker_machine_types[min(index, length(var.worker_machine_types) - 1)]
       boot_disk_size_gb = var.worker_boot_disk_size_gb
+      has_secondary_disk= false
     }
   ]
 
-  nodes         = concat(local.control_plane_nodes, local.worker_nodes)
+  nfs_nodes = [
+    for index in range(var.nfs_count) : {
+      name              = format("%s-%d", var.nfs_name_prefix, index + 1)
+      instance_name     = format("%s-%s-%d", var.instance_name_prefix, var.nfs_name_prefix, index + 1)
+      role              = "nfs"
+      node_index        = index
+      global_index      = var.control_plane_count + var.worker_count + index
+      zone              = local.effective_zones[(var.control_plane_count + var.worker_count + index) % length(local.effective_zones)]
+      region            = replace(local.effective_zones[(var.control_plane_count + var.worker_count + index) % length(local.effective_zones)], "/-[a-z]$/", "")
+      machine_type      = var.nfs_machine_types[min(index, length(var.nfs_machine_types) - 1)]
+      boot_disk_size_gb = var.nfs_boot_disk_size_gb
+      has_secondary_disk= true
+    }
+  ]
+
+  nodes         = concat(local.control_plane_nodes, local.worker_nodes, local.nfs_nodes)
   nodes_by_name = { for node in local.nodes : node.name => node }
+  nfs_nodes_by_name = { for node in local.nfs_nodes : node.name => node }
 
   ssh_public_key = trimspace(var.ssh_public_key) != "" ? trimspace(var.ssh_public_key) : trimspace(file(pathexpand(var.ssh_public_key_path)))
 }
@@ -94,6 +112,20 @@ resource "terraform_data" "preflight" {
       error_message = "No usable GCP zones remain. Remove values from blocked_zones/blocked_regions or add more zones."
     }
   }
+}
+
+# Create secondary data disk for Ceph OSD on NFS nodes (/dev/sdb)
+resource "google_compute_disk" "ceph_osd" {
+  for_each = local.nfs_nodes_by_name
+
+  name = "${each.value.instance_name}-ceph-osd"
+  type = var.boot_disk_type
+  zone = each.value.zone
+  size = var.nfs_data_disk_size_gb
+
+  labels = merge(var.labels, {
+    purpose = "ceph-osd"
+  })
 }
 
 resource "google_compute_address" "this" {
@@ -118,7 +150,7 @@ resource "google_compute_instance" "this" {
     var.network_tags,
     [
       local.cluster_tag,
-      each.value.role == "control_plane" ? local.control_plane_tag : local.worker_tag,
+      each.value.role == "control_plane" ? local.control_plane_tag : (each.value.role == "worker" ? local.worker_tag : "${var.instance_name_prefix}-nfs"),
     ]
   ))
 
@@ -127,6 +159,14 @@ resource "google_compute_instance" "this" {
       image = var.image
       size  = each.value.boot_disk_size_gb
       type  = var.boot_disk_type
+    }
+  }
+
+  dynamic "attached_disk" {
+    for_each = each.value.has_secondary_disk ? [1] : []
+    content {
+      source      = google_compute_disk.ceph_osd[each.key].self_link
+      device_name = "sdb"
     }
   }
 
