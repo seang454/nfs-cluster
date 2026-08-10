@@ -1,0 +1,37 @@
+# Local .terraform directories
+**/.terraform/*
+
+# Terraform lock file (commit this instead if you want reproducible providers)
+# .terraform.lock.hcl
+
+# State files — never commit these, they contain secrets in plaintext
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+
+# Crash log files
+crash.log
+crash.*.log
+
+# Variable files that hold real secrets/values
+# terraform.tfvars
+*.auto.tfvars
+!terraform.tfvars.example
+
+# Override files
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# CLI config
+.terraformrc
+terraform.rc
+
+# Plan output
+*.tfplan
+
+# OS/editor cruft
+.DS_Store
+.idea/
+.vscode/

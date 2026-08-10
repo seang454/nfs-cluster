@@ -1,0 +1,58 @@
+---
+- name: Check whether Docker is already installed
+  ansible.builtin.command: docker --version
+  register: harbor_docker_check
+  changed_when: false
+  failed_when: false
+
+- name: Download Docker's official convenience install script
+  ansible.builtin.get_url:
+    url: https://get.docker.com
+    dest: "{{ harbor_download_tmp_dir }}/get-docker.sh"
+    mode: "0755"
+    timeout: 60
+  when: harbor_docker_check.rc != 0
+
+- name: Run Docker convenience install script (installs Engine + compose plugin)
+  ansible.builtin.command: sh {{ harbor_download_tmp_dir }}/get-docker.sh
+  when: harbor_docker_check.rc != 0
+  register: harbor_docker_install
+  changed_when: harbor_docker_install.rc == 0
+
+- name: Ensure Docker service is enabled and started
+  ansible.builtin.systemd:
+    name: docker
+    state: started
+    enabled: true
+
+- name: Check whether docker compose (plugin) is available
+  ansible.builtin.command: docker compose version
+  register: harbor_compose_check
+  changed_when: false
+  failed_when: false
+
+- name: Install Docker Compose v2 package when plugin is missing
+  ansible.builtin.apt:
+    name: docker-compose-v2
+    state: present
+    update_cache: true
+  when:
+    - harbor_compose_check.rc != 0
+    - ansible_facts['os_family'] == 'Debian'
+
+- name: Verify docker compose (plugin) is available
+  ansible.builtin.command: docker compose version
+  register: harbor_compose_check
+  changed_when: false
+
+- name: Show docker compose version found
+  ansible.builtin.debug:
+    msg: "{{ harbor_compose_check.stdout }}"
+
+- name: Add users to the docker group
+  ansible.builtin.user:
+    name: "{{ item }}"
+    groups: docker
+    append: true
+  loop: "{{ harbor_docker_users }}"
+  when: harbor_docker_users | length > 0
