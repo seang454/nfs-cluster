@@ -153,7 +153,7 @@ spec:
 
 ---
 
-## 🔬 Individual Deep-Dive Reference & Diagrams for Every Tool
+## 🔬 Individual Deep-Dive Reference & Step-by-Step Diagram Explanations for Every Tool
 
 ---
 
@@ -172,11 +172,17 @@ flowchart LR
     Node3 -->|"Pass Token"| Node1
 ```
 
+#### 📌 How to Read & Understand This Diagram:
+- **Token Rotation**: `haproxy-1` holds a virtual Token packet and passes it to `haproxy-2` via UDP port 5404/5405.
+- **Ring Order**: `haproxy-2` updates its node status and passes the Token to `haproxy-3`, which passes it back to `haproxy-1`.
+- **Health Verification**: Every full token loop proves to all 3 nodes that all servers are alive and healthy.
+- **Failure Detection**: If `haproxy-1` fails to pass the Token within 1000ms, `haproxy-2` and `haproxy-3` detect the break and form a majority quorum (2/3).
+
 - **Deep Technical Details**:
-  - Implements the **Totem Single-Ring Ordering Protocol**. A virtual token rotates sequentially between nodes on UDP ports 5404/5405.
+  - Implements the **Totem Single-Ring Ordering Protocol**.
   - **Quorum Enforcement**: Calculates mathematical quorum ($N/2 + 1$). In a 3-node cluster, at least 2 nodes must be alive to form quorum.
-  - **Split-Brain Protection**: If `haproxy-1` gets partitioned from the network, `haproxy-2` and `haproxy-3` form a majority quorum (2/3), while `haproxy-1` sees only 1/3, loses quorum, and self-fences.
-- **What Breaks Without It**: Nodes cannot tell if other servers are alive, leading to dual-active split-brain write collisions that permanently corrupt CephFS.
+  - **Split-Brain Protection**: Prevents partitioned nodes from touching storage simultaneously.
+- **What Breaks Without It**: Dual-active split-brain write collisions that permanently corrupt CephFS.
 
 ---
 
@@ -192,13 +198,16 @@ flowchart TB
     CRMd -->|"Execute"| ServiceStart["Start nfs-ganesha Service"]
 ```
 
+#### 📌 How to Read & Understand This Diagram:
+- **Event Trigger**: Corosync notifies Pacemaker that `haproxy-1` has crashed.
+- **State Lookup**: Pacemaker updates `CIB` (Cluster Information Base XML database).
+- **Transition Calculation**: `PEngine` calculates the optimal recovery path adhering to ordering & colocation constraints.
+- **Execution**: `CRMd` daemon issues two OS commands: (1) Move Virtual IP `10.140.0.5` to `haproxy-2`, and (2) Start `nfs-ganesha`.
+
 - **Deep Technical Details**:
-  - **CIB State Engine**: Syncs cluster configuration XML state file (`cib.xml`) across all storage nodes.
-  - **PEngine Transition Graph**: Evaluates rules and constraints when events occur:
-    - **Ordering Constraint**: `nfs_vip` (Virtual IP) MUST start BEFORE `nfs-ganesha`.
-    - **Colocation Constraint**: `nfs-ganesha` MUST run on the exact node holding `nfs_vip`.
-  - **15-Second Active Health Checks**: Polls TCP port 2049 every 15 seconds to ensure NFS-Ganesha is responding, automatically triggering a local service restart or cross-node failover if it fails.
-  - **STONITH Fencing**: Executes node fencing (reboot/power cut) if a node becomes unresponsive.
+  - **Constraints**: Enforces **Ordering** (`nfs_vip` starts BEFORE `nfs-ganesha`) and **Colocation** (`nfs-ganesha` runs on the SAME node holding `nfs_vip`).
+  - **15-Second Health Checks**: Polls TCP port 2049 every 15 seconds to ensure NFS-Ganesha is healthy.
+  - **STONITH Fencing**: Forcefully reboots unresponsive nodes.
 - **What Breaks Without It**: When a server crashes, no automated process exists to migrate `10.140.0.5` or start NFS services on standby nodes.
 
 ---
@@ -214,13 +223,16 @@ flowchart LR
     ARPCmd --> Router["GCP VPC Router ARP Table Updated"]
 ```
 
+#### 📌 How to Read & Understand This Diagram:
+- **Trigger**: Pacemaker orders `IPaddr2` to start the Virtual IP on `haproxy-2`.
+- **Step 1 (IP Binding)**: `IPaddr2` executes OS command `ip addr add 10.140.0.5/32 dev ens4` to attach the IP to `haproxy-2`'s network card.
+- **Step 2 (Network Broadcast)**: `IPaddr2` fires `arping -U -c 5 -I ens4 10.140.0.5` (Gratuitous ARP broadcast).
+- **Step 3 (VPC Update)**: The GCP VPC router receives the ARP broadcast and immediately updates its internal routing table so all client traffic flows to `haproxy-2`.
+
 - **Deep Technical Details**:
-  - **OCF Specification**: Provides standard execution hooks (`start`, `stop`, `status`, `monitor`).
-  - **`IPaddr2` Execution Engine**:
-    1. Executes `ip addr add 10.140.0.5/32 dev ens4` to bind the IP to the interface.
-    2. Executes `arping -U -c 5 -I ens4 10.140.0.5` (Gratuitous ARP broadcast).
-  - **Gratuitous ARP Broadcasting**: Informs all network switches and GCP VPC routers that `10.140.0.5` is now bound to `haproxy-2`'s MAC address.
-- **What Breaks Without It**: Pacemaker attempts a failover, but the OS never physically binds `10.140.0.5` to the network interface or updates router ARP tables.
+  - **OCF Specification**: Provides standard hooks (`start`, `stop`, `status`, `monitor`).
+  - **Gratuitous ARP**: Unprompted ARP broadcast forcing network switches to update MAC address associations for `10.140.0.5`.
+- **What Breaks Without It**: Pacemaker attempts failover, but the OS never physically binds `10.140.0.5` to the network interface or updates router ARP tables.
 
 ---
 
@@ -235,12 +247,17 @@ flowchart TB
     MDCache --> FSAL["FSAL Storage Layer"]
 ```
 
+#### 📌 How to Read & Understand This Diagram:
+- **Incoming Traffic**: TCP socket listener on port 2049 receives NFSv4 packets from Kubernetes pods.
+- **Thread Allocation**: Assigns requests to dynamic `Worker Thread Pool` for multi-threaded processing.
+- **RPC Parsing**: Parses NFSv4 RPC compound calls (`SEQUENCE`, `PUTFH`, `WRITE`, `COMMIT`).
+- **RAM Lookup**: `MDCache` looks up inode attributes in memory to accelerate read/write performance.
+- **Plugin Hand-off**: Cleaned file operations are handed to FSAL storage plugin.
+
 - **Deep Technical Details**:
-  - **User-Space Architecture**: Runs as `/usr/bin/ganesha.nfsd`, bypassing kernel single-thread bottlenecks.
-  - **Dynamic Multi-Threading**: Spawns worker thread pools to handle thousands of concurrent `ReadWriteMany` requests from Kubernetes pods.
-  - **In-Memory `mdcache`**: Caches inode attributes in RAM to accelerate file metadata lookups (`LOOKUP`, `GETATTR`).
-  - **NFSv4 State Lock Recovery**: Integrates with Pacemaker via DBus to allow client pods to reclaim NFSv4 file locks gracefully during failover without `ESTALE` errors.
-- **What Breaks Without It**: Pods hit single-threaded kernel locks under high load and suffer `Stale File Handle` (`ESTALE`) crashes during server failovers.
+  - **User-Space Daemon**: Runs as `/usr/bin/ganesha.nfsd`, bypassing kernel single-thread bottlenecks.
+  - **NFSv4 State Lock Recovery**: Integrates with Pacemaker via DBus to allow client pods to reclaim file locks during failover without `ESTALE` errors.
+- **What Breaks Without It**: Pods hit single-threaded kernel locks under high load and suffer `Stale File Handle` (`ESTALE`) crashes during failovers.
 
 ---
 
@@ -254,10 +271,15 @@ flowchart LR
     CAPI -->|"ceph_ll_write"| CephOSD["Ceph OSD Storage"]
 ```
 
+#### 📌 How to Read & Understand This Diagram:
+- **NFS Input**: Receives NFS RPC `WRITE` requests from `nfs-ganesha`.
+- **Inode Translation**: `FSAL_CEPH` converts NFS File Handles into CephFS Inode identifiers (`vinode_t`).
+- **Direct Memory API Call**: Invokes user-space C function `ceph_ll_write()` in `libcephfs.so`.
+- **Direct Ceph I/O**: Data streams directly into Ceph OSD storage without writing any temporary files to local host disk.
+
 - **Deep Technical Details**:
-  - **Direct RAM-to-Ceph Streaming**: Translates NFS RPC calls directly into `libcephfs.so` user-space C function calls (`ceph_ll_write()`, `ceph_ll_lookup()`) without touching local host disks.
-  - **Ceph Inode Lock Mapping**: Maps NFS file locks directly to Ceph MDS inode locks to allow safe multi-pod file edits.
-  - **POSIX Permission Mapping**: Preserves Linux user IDs (`uid`), group IDs (`gid`), and POSIX permissions across Ceph storage.
+  - **RAM-to-Ceph Streaming**: Direct C API streaming bypasses local host filesystem.
+  - **Lock & Permission Mapping**: Maps NFS locks to Ceph MDS inode locks and preserves Linux `uid`/`gid` permissions.
 - **What Breaks Without It**: `nfs-ganesha` cannot communicate with Ceph, forcing storage to write to un-replicated local host disks.
 
 ---
@@ -273,11 +295,15 @@ flowchart TB
     DeviceScan --> DeployContainer["Deploy ceph-osd Docker Container"]
 ```
 
+#### 📌 How to Read & Understand This Diagram:
+- **Bootstrap**: `cephadm bootstrap` initializes the first monitor node and generates cluster SSH keys (`/etc/ceph/ceph.pub`).
+- **Host Discovery**: `ceph orch host add` uses SSH to connect to `haproxy-2` and `haproxy-3`.
+- **Device Scanning**: `ceph orch device ls` automatically detects unpartitioned raw block devices (`/dev/sdb`).
+- **Container Deployment**: `cephadm` formats `/dev/sdb` via `lvm2` and launches `ceph-osd` Docker container daemons.
+
 - **Deep Technical Details**:
-  - **Automated Container Lifecycle**: Manages `ceph-mon`, `ceph-mgr`, `ceph-osd`, and `ceph-mds` as Docker containers (`quay.io/ceph/ceph`), restarting failed containers automatically.
-  - **Automated SSH Key Propagation**: Automatically connects to nodes via SSH to install prerequisites and provision daemons.
-  - **Automated Disk Setup**: Detects raw attached disks (`ceph orch device ls`), formats `/dev/sdb` via `lvm2`, and provisions BlueStore OSD containers automatically.
-  - **Zero-Downtime Rolling Upgrades**: Performs rolling container updates node-by-node without taking CephFS offline.
+  - **Automated Lifecycle**: Manages `ceph-mon`, `ceph-mgr`, `ceph-osd`, and `ceph-mds` Docker containers (`quay.io/ceph/ceph`).
+  - **Zero-Downtime Upgrades**: Executes rolling container image updates node-by-node.
 - **What Breaks Without It**: Cluster deployment requires over 150 manual, error-prone terminal commands for SSH keys, daemons, and systemd services.
 
 ---
@@ -292,9 +318,13 @@ flowchart LR
     CephCommon -->|"libcephfs.so"| NativeIO["Direct CephFS I/O Stream"]
 ```
 
+#### 📌 How to Read & Understand This Diagram:
+- **Dual Functionality**: `ceph-common` serves both administrators (`ceph` CLI) and storage plugins (`libcephfs.so`).
+- **Status Monitoring**: Administrator runs `ceph -s` to query cluster health, OSD status, and filesystem state.
+- **C Library Streaming**: `libcephfs.so` provides native POSIX C function wrappers (`ceph_ll_lookup`, `ceph_ll_read`, `ceph_ll_write`) for `nfs-ganesha-ceph`.
+
 - **Deep Technical Details**:
-  - **`libcephfs.so` Shared Library**: Provides low-level C functions (`ceph_ll_lookup`, `ceph_ll_read`, `ceph_ll_write`) required by `nfs-ganesha-ceph`.
-  - **`ceph` CLI Management Tool**: Provides cluster management commands (`ceph status`, `ceph osd status`, `ceph fs ls`).
+  - Provides low-level C functions and CLI administration tools.
 - **What Breaks Without It**: `nfs-ganesha-ceph` fails to load due to missing `libcephfs.so` shared libraries, and administrative health monitoring commands fail.
 
 ---
@@ -310,10 +340,13 @@ flowchart TB
     Namespaces --> Containers
 ```
 
+#### 📌 How to Read & Understand This Diagram:
+- **Kernel Resource Controls**: `cgroups v2` restricts CPU and RAM consumption (`memory.max`, `cpu.max`) per Ceph container.
+- **Namespace Isolation**: Linux `pid`, `net`, `ipc`, and `mnt` namespaces keep Ceph container libraries completely separate from host OS libraries.
+- **Container Execution**: Runs official Ceph container images (`quay.io/ceph/ceph`) with automatic restart policies.
+
 - **Deep Technical Details**:
-  - **Kernel Resource Control (`cgroups v2`)**: Enforces memory and CPU resource boundaries (`memory.max`, `cpu.max`) on Ceph daemons.
-  - **Namespace Isolation**: Uses `pid`, `net`, `ipc`, and `mnt` Linux namespaces to keep Ceph libraries completely separate from the host OS.
-  - **Restart Policies**: Automatically restarts failed containers (`restart: always`).
+  - Enforces container isolation and resource boundaries on all Ceph daemons.
 - **What Breaks Without It**: Ceph daemons pollute host OS libraries, causing dependency conflicts and unmanaged process crashes.
 
 ---
@@ -329,10 +362,13 @@ flowchart LR
     BlueStore --> BlueFS["BlueFS Block Data Chunks"]
 ```
 
+#### 📌 How to Read & Understand This Diagram:
+- **Disk Format**: `lvm2` takes raw block disk `/dev/sdb` (50GB) and formats it into LVM Volume Groups.
+- **Hand-off to BlueStore**: Raw volume group is handed directly to Ceph **BlueStore** engine.
+- **Metadata vs Data**: BlueStore writes metadata and Write-Ahead Logs (WAL) to **RocksDB**, while data block chunks are allocated by **BlueFS**.
+
 - **Deep Technical Details**:
-  - **Raw Block Device Allocation**: Formats physical disk `/dev/sdb` into raw volume groups for Ceph **BlueStore**.
-  - **Bypasses Local Filesystems**: Completely avoids ext4/xfs filesystems to eliminate double-journaling overhead.
-  - **RocksDB & BlueFS**: BlueStore uses **RocksDB** for metadata/WAL (Write-Ahead Logging) and **BlueFS** for raw block data allocation.
+  - Completely bypasses ext4/xfs filesystems to eliminate double-journaling performance penalties.
 - **What Breaks Without It**: Ceph OSDs cannot format raw disks, falling back to slow filesystem journaling.
 
 ---
@@ -347,9 +383,13 @@ flowchart LR
     Clock --> CephConsensus["Ceph Block Timestamp Consensus"]
 ```
 
+#### 📌 How to Read & Understand This Diagram:
+- **NTP Ingestion**: `chrony` receives time packets from central NTP server pools via raw kernel timestamp sockets.
+- **Drift Adjustment**: Continuously adjusts local Linux system clock drift to maintain **sub-0.5ms accuracy**.
+- **Cluster Consensus**: Synchronized system clock feeds accurate timestamps into Ceph block consensus engine.
+
 - **Deep Technical Details**:
-  - **POSIX Kernel Timestamping**: Uses raw `SO_TIMESTAMPING` sockets to measure NTP network offset and jitter.
-  - **Clock Skew Threshold**: Keeps node clocks within **<0.5ms**. If drift exceeds 0.05 seconds, Ceph locks metadata updates to prevent timestamp corruption.
+  - Keeps drift under 0.5ms. If drift exceeds 0.05s, Ceph locks metadata mutations to prevent timestamp corruption.
 - **What Breaks Without It**: Ceph locks metadata operations and enters `HEALTH_WARN (clock skew detected)`, blocking file writes.
 
 ---
@@ -364,10 +404,14 @@ flowchart LR
     Bypassed --> Ports["Ports 2049, 6789, 2224, 5404/5405 Open"]
 ```
 
+#### 📌 How to Read & Understand This Diagram:
+- **Traffic Arrival**: Network packets arrive at Linux kernel Netfilter hooks (`INPUT`, `OUTPUT`).
+- **Bypass Filter**: With `ufw` configured disabled, netfilter skips packet inspection and drop rules.
+- **Port Delivery**: Cluster traffic reaches destination ports (2049, 6789, 2224, 5404/5405) instantly with zero inspection latency.
+
 - **Deep Technical Details**:
-  - **Netfilter Hook Management**: Controls Linux kernel `iptables`/`nftables` packet filtering chains (`INPUT`, `OUTPUT`, `FORWARD`).
-  - **Unblocked Cluster Traffic**: Configured disabled by default so cluster communication ports operate with zero packet filtering delay.
-- **What Breaks Without It**: Incorrectly configured firewall rules drop Corosync heartbeat packets (5404/5405), causing false failover loops.
+  - Unblocked cluster communication prevents inter-node heartbeat drops.
+- **What Breaks Without It**: Firewall rules drop Corosync heartbeat packets (5404/5405), causing false failover loops.
 
 ---
 
@@ -380,9 +424,12 @@ flowchart LR
     Admin["Admin Debugging"] -->|"net-tools"| Sockets["netstat and ifconfig Socket Analysis"]
 ```
 
+#### 📌 How to Read & Understand This Diagram:
+- **Automated Provisioning**: Ansible playbooks execute `curl` or `wget` to fetch GPG signing keys and repository manifests.
+- **System Diagnostics**: Administrator runs `net-tools` (`netstat -tulnp`, `ifconfig`) to verify active TCP/UDP socket listeners.
+
 - **Deep Technical Details**:
-  - **`curl` / `wget`**: Performs HTTP/HTTPS transfers for GPG signing keys and repository packages.
-  - **`net-tools`**: Provides low-level socket inspection tools (`netstat -tulnp`, `ifconfig`) to verify port bindings.
+  - Essential for fetching keys and analyzing socket states.
 - **What Breaks Without It**: Playbooks fail to fetch GPG repository keys, and network socket inspection commands fail.
 
 ---
@@ -396,9 +443,13 @@ flowchart LR
     KernelNFS -->|"SunRPC Layer rpcbind"| Socket["TCP Socket to 10.140.0.5:2049"]
 ```
 
+#### 📌 How to Read & Understand This Diagram:
+- **Pod Mount Trigger**: Kubernetes pod requests an NFS volume mount on a worker node.
+- **RPC Encapsulation**: `nfs-common` kernel module (`mount.nfs4` & `rpcbind`) packages the file request into SunRPC network frames.
+- **Socket Transmission**: Streams SunRPC network frames over TCP socket to Virtual IP `10.140.0.5:2049`.
+
 - **Deep Technical Details**:
-  - **Kernel NFS Client Drivers**: Provides Linux kernel modules (`nfs.ko`, `nfsv4.ko`) and helper utilities (`mount.nfs4`, `rpcbind`).
-  - **TCP Socket Management**: Manages TCP connections to `10.140.0.5:2049` for client mount points.
+  - Provides Linux kernel drivers (`nfs.ko`, `nfsv4.ko`) on Kubernetes nodes.
 - **What Breaks Without It**: Kubernetes worker nodes fail to mount NFS volumes, throwing `mount: unknown filesystem type 'nfs'`.
 
 ---
@@ -414,7 +465,12 @@ flowchart TB
     PV -->|"3. Bind"| PVC
 ```
 
+#### 📌 How to Read & Understand This Diagram:
+- **Watch Event**: `k8s-nfs-provisioner` pod watches K8s API server for new PVCs specifying `storageClassName: nfs-client`.
+- **Subdirectory Provisioning**: Provisioner pod automatically creates subdirectory `/data/default-pvc-id` on `10.140.0.5`.
+- **PV Object Creation**: Provisioner pod creates a `PersistentVolume` (PV) object in Kubernetes API.
+- **Binding**: Automatically binds the PV object to the user's PVC.
+
 - **Deep Technical Details**:
-  - **StorageClass Controller Pattern**: Monitors the Kubernetes API server for PVC events specifying `storageClassName: nfs-client`.
-  - **Automated Directory Provisioning**: Automatically creates subdirectories on `10.140.0.5:/data` and provisions corresponding `PersistentVolume` (PV) objects.
+  - Implements the Kubernetes StorageClass controller pattern for dynamic storage automation.
 - **What Breaks Without It**: Administrators must manually SSH into NFS servers to create subdirectories and write complex PV YAML manifests for every single pod.
