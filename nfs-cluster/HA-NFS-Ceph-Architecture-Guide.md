@@ -89,6 +89,70 @@ This document provides a comprehensive technical reference for the **High-Availa
 
 ---
 
+## ⚡ High-Availability Failover Sequence
+
+When `haproxy-1` crashes or loses power:
+
+1. **`corosync`** detects missed token rotations on UDP 5404/5405 within **1000ms**.
+2. **`pacemaker`** re-evaluates cluster membership and assigns Virtual IP `10.140.0.5` to `haproxy-2`.
+3. **`resource-agents-extra`** (`IPaddr2`) executes `ip addr add 10.140.0.5/32 dev ens4` on `haproxy-2` and fires a **Gratuitous ARP (`arping -U 10.140.0.5`)** to update the GCP VPC router.
+4. **`nfs-common`** on Kubernetes worker nodes automatically retries the TCP connection.
+5. **`nfs-ganesha`** on `haproxy-2` handles the request, accessing identical mirrored data in **CephFS**.
+
+---
+
+## ☸️ Kubernetes Usage Guide
+
+### Option 1: Dynamic PVC Approach (Recommended)
+
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: app-storage-pvc
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: nfs-client
+  resources:
+    requests:
+      storage: 10Gi
+```
+
+### Option 2: Direct Inline NFS Mount (Legacy / Spring Apps)
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spring-register-app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: spring-register
+  template:
+    metadata:
+      labels:
+        app: spring-register
+    spec:
+      containers:
+        - name: register-cont
+          image: xeng/spring-register:7
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: register-vol
+              mountPath: /src/main/resources/images
+      volumes:
+        - name: register-vol
+          nfs:
+            server: 10.140.0.5    # 👈 Active HA Virtual IP
+            path: /data           # 👈 Ceph NFS Export Path
+```
+
+---
+
 ## 🔬 Individual Deep-Dive Reference & Diagrams for Every Tool
 
 ---
@@ -98,14 +162,14 @@ High-frequency cluster messaging engine running on UDP ports 5404 & 5405.
 
 ```mermaid
 flowchart LR
-    subgraph CorosyncRing ["💓 Totem Token Ring (UDP 5404/5405)"]
+    subgraph CorosyncRing ["Totem Token Ring UDP 5404/5405"]
         Node1["haproxy-1"]
         Node2["haproxy-2"]
         Node3["haproxy-3"]
     end
-    Node1 -->|Pass Token| Node2
-    Node2 -->|Pass Token| Node3
-    Node3 -->|Pass Token| Node1
+    Node1 -->|"Pass Token"| Node2
+    Node2 -->|"Pass Token"| Node3
+    Node3 -->|"Pass Token"| Node1
 ```
 
 - **Deep Technical Details**:
@@ -121,11 +185,11 @@ High-availability cluster resource manager (The Brain).
 
 ```mermaid
 flowchart TB
-    Corosync["Corosync Event"] -->|Node Failure| CIB["CIB XML State Database"]
-    CIB --> PEngine["PEngine (Transition Graph Scheduler)"]
-    PEngine -->|Action Plan| CRMd["CRMd Daemon"]
-    CRMd -->|Execute| IPShift["Move Virtual IP 10.140.0.5 to haproxy-2"]
-    CRMd -->|Execute| ServiceStart["Start nfs-ganesha Service"]
+    Corosync["Corosync Event"] -->|"Node Failure"| CIB["CIB XML State Database"]
+    CIB --> PEngine["PEngine Transition Graph Scheduler"]
+    PEngine -->|"Action Plan"| CRMd["CRMd Daemon"]
+    CRMd -->|"Execute"| IPShift["Move Virtual IP 10.140.0.5 to haproxy-2"]
+    CRMd -->|"Execute"| ServiceStart["Start nfs-ganesha Service"]
 ```
 
 - **Deep Technical Details**:
@@ -144,9 +208,9 @@ Standardized OCF script library executed by Pacemaker.
 
 ```mermaid
 flowchart LR
-    Pace["Pacemaker"] -->|Triggers start| OCF["IPaddr2 OCF Script"]
-    OCF -->|1. Linux Command| IPCmd["ip addr add 10.140.0.5/32 dev ens4"]
-    OCF -->|2. Network Broadcast| ARPCmd["arping -U -c 5 -I ens4 10.140.0.5"]
+    Pace["Pacemaker"] -->|"Triggers start"| OCF["IPaddr2 OCF Script"]
+    OCF -->|"Linux Command"| IPCmd["ip addr add 10.140.0.5/32 dev ens4"]
+    OCF -->|"Network Broadcast"| ARPCmd["arping -U -c 5 -I ens4 10.140.0.5"]
     ARPCmd --> Router["GCP VPC Router ARP Table Updated"]
 ```
 
@@ -165,9 +229,9 @@ User-space multi-threaded NFSv4 server daemon listening on TCP port 2049.
 
 ```mermaid
 flowchart TB
-    TCPListener["TCP Socket Listener (0.0.0.0:2049)"] --> WorkerPool["Worker Thread Pool"]
-    WorkerPool -->|Parse NFSv4 Calls| CompoundCalls["RPC Calls: SEQUENCE, PUTFH, WRITE, COMMIT"]
-    CompoundCalls --> MDCache["In-Memory Metadata Cache (mdcache)"]
+    TCPListener["TCP Socket Listener 0.0.0.0:2049"] --> WorkerPool["Worker Thread Pool"]
+    WorkerPool -->|"Parse NFSv4 Calls"| CompoundCalls["RPC Calls SEQUENCE PUTFH WRITE COMMIT"]
+    CompoundCalls --> MDCache["In-Memory Metadata Cache mdcache"]
     MDCache --> FSAL["FSAL Storage Layer"]
 ```
 
@@ -185,9 +249,9 @@ FSAL plugin bridge (`libganesha_fsal_ceph.so`) translating NFS requests directly
 
 ```mermaid
 flowchart LR
-    NFSCall["NFS RPC WRITE"] --> FSAL["nfs-ganesha-ceph (FSAL_CEPH)"]
-    FSAL -->|Convert NFS FH -> Ceph Inode| CAPI["libcephfs.so C API"]
-    CAPI -->|ceph_ll_write()| CephOSD["Ceph OSD Storage"]
+    NFSCall["NFS RPC WRITE"] --> FSAL["nfs-ganesha-ceph FSAL_CEPH Plugin"]
+    FSAL -->|"Convert NFS FH to Ceph Inode"| CAPI["libcephfs.so C API"]
+    CAPI -->|"ceph_ll_write"| CephOSD["Ceph OSD Storage"]
 ```
 
 - **Deep Technical Details**:
@@ -203,16 +267,16 @@ Official master Ceph cluster orchestrator.
 
 ```mermaid
 flowchart TB
-    Bootstrap["cephadm bootstrap"] --> SSHKeys["Generate SSH Keypair (/etc/ceph/ceph.pub)"]
+    Bootstrap["cephadm bootstrap"] --> SSHKeys["Generate SSH Keypair /etc/ceph/ceph.pub"]
     SSHKeys --> HostAdd["ceph orch host add haproxy-2"]
-    HostAdd --> DeviceScan["ceph orch device ls (/dev/sdb)"]
+    HostAdd --> DeviceScan["ceph orch device ls /dev/sdb"]
     DeviceScan --> DeployContainer["Deploy ceph-osd Docker Container"]
 ```
 
 - **Deep Technical Details**:
   - **Automated Container Lifecycle**: Manages `ceph-mon`, `ceph-mgr`, `ceph-osd`, and `ceph-mds` as Docker containers (`quay.io/ceph/ceph`), restarting failed containers automatically.
   - **Automated SSH Key Propagation**: Automatically connects to nodes via SSH to install prerequisites and provision daemons.
-  - **Automated OSD Creation**: Scans attached block devices (`ceph orch device ls`), formats `/dev/sdb` via `lvm2`, and provisions BlueStore OSD containers automatically.
+  - **Automated Disk Setup**: Detects raw attached disks (`ceph orch device ls`), formats `/dev/sdb` via `lvm2`, and provisions BlueStore OSD containers automatically.
   - **Zero-Downtime Rolling Upgrades**: Performs rolling container updates node-by-node without taking CephFS offline.
 - **What Breaks Without It**: Cluster deployment requires over 150 manual, error-prone terminal commands for SSH keys, daemons, and systemd services.
 
@@ -223,9 +287,9 @@ Administrative CLI tools (`ceph`) and native user-space libraries (`libcephfs.so
 
 ```mermaid
 flowchart LR
-    Admin["Admin / Ganesha"] -->|Use CLI / C API| CephCommon["ceph-common"]
-    CephCommon -->|ceph -s| Status["Cluster Status"]
-    CephCommon -->|libcephfs.so| NativeIO["Direct CephFS I/O Stream"]
+    Admin["Admin or Ganesha"] -->|"Use CLI or C API"| CephCommon["ceph-common"]
+    CephCommon -->|"ceph status"| Status["Cluster Status"]
+    CephCommon -->|"libcephfs.so"| NativeIO["Direct CephFS I/O Stream"]
 ```
 
 - **Deep Technical Details**:
@@ -240,9 +304,9 @@ Linux container runtime engine.
 
 ```mermaid
 flowchart TB
-    HostKernel["Linux Host Kernel"] --> CGroups["cgroups v2 (memory.max, cpu.max)"]
-    HostKernel --> Namespaces["Namespaces (pid, net, mnt)"]
-    CGroups --> Containers["Docker Containers (quay.io/ceph/ceph)"]
+    HostKernel["Linux Host Kernel"] --> CGroups["cgroups v2 memory.max cpu.max"]
+    HostKernel --> Namespaces["Namespaces pid net mnt"]
+    CGroups --> Containers["Docker Containers quay.io/ceph/ceph"]
     Namespaces --> Containers
 ```
 
@@ -259,10 +323,10 @@ Logical Volume Manager.
 
 ```mermaid
 flowchart LR
-    RawDisk["Physical Disk /dev/sdb (50GB)"] --> LVM["lvm2 Volume Group"]
-    LVM -->|Raw Block Device| BlueStore["Ceph BlueStore Engine"]
-    BlueStore --> RocksDB["RocksDB (WAL & Metadata)"]
-    BlueStore --> BlueFS["BlueFS (Block Data Chunks)"]
+    RawDisk["Physical Disk /dev/sdb 50GB"] --> LVM["lvm2 Volume Group"]
+    LVM -->|"Raw Block Device"| BlueStore["Ceph BlueStore Engine"]
+    BlueStore --> RocksDB["RocksDB WAL & Metadata"]
+    BlueStore --> BlueFS["BlueFS Block Data Chunks"]
 ```
 
 - **Deep Technical Details**:
@@ -278,8 +342,8 @@ NTP time synchronization daemon.
 
 ```mermaid
 flowchart LR
-    NTP["NTP Servers"] -->|Kernel Timestamp Sockets| Chrony["chrony Daemon"]
-    Chrony -->|Drift Adjustment| Clock["System Clock (<0.5ms Drift)"]
+    NTP["NTP Servers"] -->|"Kernel Timestamp Sockets"| Chrony["chrony Daemon"]
+    Chrony -->|"Drift Adjustment"| Clock["System Clock Sub-0.5ms Drift"]
     Clock --> CephConsensus["Ceph Block Timestamp Consensus"]
 ```
 
@@ -295,8 +359,8 @@ Linux Uncomplicated Firewall.
 
 ```mermaid
 flowchart LR
-    Packets["Incoming Cluster Traffic"] --> Netfilter["Kernel Netfilter Hooks (INPUT/OUTPUT)"]
-    Netfilter -->|ufw disabled| Bypassed["Zero Packet Dropping / Inspection Latency"]
+    Packets["Incoming Cluster Traffic"] --> Netfilter["Kernel Netfilter Hooks INPUT OUTPUT"]
+    Netfilter -->|"ufw disabled"| Bypassed["Zero Packet Dropping Inspection Latency"]
     Bypassed --> Ports["Ports 2049, 6789, 2224, 5404/5405 Open"]
 ```
 
@@ -312,8 +376,8 @@ System prerequisites and network debugging utilities.
 
 ```mermaid
 flowchart LR
-    Script["Ansible Playbooks"] -->|curl / wget| Repos["Download GPG Keys & Packages"]
-    Admin["Admin Debugging"] -->|net-tools| Sockets["netstat / ifconfig Socket Analysis"]
+    Script["Ansible Playbooks"] -->|"curl or wget"| Repos["Download GPG Keys & Packages"]
+    Admin["Admin Debugging"] -->|"net-tools"| Sockets["netstat and ifconfig Socket Analysis"]
 ```
 
 - **Deep Technical Details**:
@@ -328,8 +392,8 @@ Linux kernel NFS client utilities (`mount.nfs4`, `rpcbind`).
 
 ```mermaid
 flowchart LR
-    Pod["Kubernetes Pod"] -->|Mount Request| KernelNFS["nfs-common (mount.nfs4)"]
-    KernelNFS -->|SunRPC Layer (rpcbind)| Socket["TCP Socket to 10.140.0.5:2049"]
+    Pod["Kubernetes Pod"] -->|"Mount Request"| KernelNFS["nfs-common mount.nfs4"]
+    KernelNFS -->|"SunRPC Layer rpcbind"| Socket["TCP Socket to 10.140.0.5:2049"]
 ```
 
 - **Deep Technical Details**:
@@ -344,10 +408,10 @@ Kubernetes dynamic `nfs-client` StorageClass controller.
 
 ```mermaid
 flowchart TB
-    PVC["Kubernetes PVC (ReadWriteMany)"] -->|Event Watch| Provisioner["k8s-nfs-provisioner Pod"]
-    Provisioner -->|1. Create Directory| NFSDir["Create Subfolder: /data/default-pvc-id"]
-    Provisioner -->|2. Generate API Object| PV["Create K8s PersistentVolume (PV) Object"]
-    PV -->|3. Bind| PVC
+    PVC["Kubernetes PVC ReadWriteMany"] -->|"Event Watch"| Provisioner["k8s-nfs-provisioner Pod"]
+    Provisioner -->|"1. Create Directory"| NFSDir["Create Subfolder: /data/default-pvc-id"]
+    Provisioner -->|"2. Generate API Object"| PV["Create K8s PersistentVolume PV Object"]
+    PV -->|"3. Bind"| PVC
 ```
 
 - **Deep Technical Details**:
