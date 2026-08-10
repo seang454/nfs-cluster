@@ -315,7 +315,67 @@ spec:
 
 ---
 
-## 6. Detailed Line-by-Line Breakdown of Traefik `.yaml` Files
+## 6. Deep Dive: Traefik Authentication & `forwardAuth` (`oauth2-proxy`)
+
+### Is `oauth2-proxy` built-in to Traefik?
+**No.** `oauth2-proxy` is **NOT built-in to Traefik**. It is an independent, open-source project ([OAuth2 Proxy](https://oauth2-proxy.github.io/oauth2-proxy/)) deployed as a separate application inside your Kubernetes cluster.
+
+### Understanding the Kubernetes Internal DNS Address
+The URL used in the `forwardAuth` middleware:
+`http://oauth2-proxy.auth.svc.cluster.local:4180/`
+
+Is a standard **Kubernetes Internal DNS address** structured as follows:
+
+| Address Segment | Meaning |
+| :--- | :--- |
+| **`oauth2-proxy`** | The name of the Kubernetes `Service`. |
+| **`auth`** | The Kubernetes `Namespace` where `oauth2-proxy` is deployed. |
+| **`svc.cluster.local`** | The default cluster-internal domain suffix for all K8s services. |
+| **`4180`** | The default container port listening on the `oauth2-proxy` service. |
+
+---
+
+### How Traefik `forwardAuth` Request Lifecycle Works
+
+Traefik's `forwardAuth` middleware acts as an **authentication delegator**. When a client makes a request to your app, Traefik pauses the request and verifies the client with the authentication provider.
+
+```
+ 1. Client requests https://api.example.com/dashboard
+                          │
+                          ▼
+ 2. Traefik receives request & triggers 'forwardAuth' Middleware
+                          │
+                          ▼
+ 3. Traefik sends sub-request to OAuth2 Proxy:
+    GET http://oauth2-proxy.auth.svc.cluster.local:4180/
+                          │
+            ┌─────────────┴─────────────┐
+            ▼                           ▼
+[ If 200 OK from Auth ]    [ If 401/403 Unauthorized ]
+            │                           │
+            ▼                           ▼
+ Traefik forwards request   Traefik blocks request &
+ to backend App Pods        redirects client to SSO Login
+ (attaches user headers:    (Google, GitHub, Keycloak,
+  X-Auth-User, etc.)         Auth0, Azure AD / Entra ID)
+```
+
+---
+
+### Comparison of Authentication Options in Traefik
+
+#### Option A: Traefik Built-in Auth (No external deployment needed)
+Best for simple internal apps, staging environments, or quick password locks.
+- **`basicAuth`**: Standard HTTP Basic Authentication reading credentials from a Kubernetes Secret (`htpasswd`).
+- **`digestAuth`**: Standard HTTP Digest Authentication.
+
+#### Option B: External Auth via `forwardAuth` (Enterprise SSO)
+Best for production enterprise apps requiring SSO login with Google Workspace, GitHub, Keycloak, Auth0, Okta, or Azure AD.
+- Traefik delegates auth checks via `forwardAuth` to an external proxy (`oauth2-proxy`, Authelia, or Authentik).
+
+---
+
+## 7. Detailed Line-by-Line Breakdown of Traefik `.yaml` Files
 
 ### 1. `IngressRoute` (HTTP / HTTPS Routing)
 
@@ -349,7 +409,7 @@ spec:
 
 ---
 
-## 7. Complete Request Lifecycle Summary
+## 8. Complete Request Lifecycle Summary
 
 ```
  1. Incoming Client Request (e.g. https://api.example.com/v1/users)
@@ -367,7 +427,7 @@ spec:
  5. Middleware #1: "rate-limit-middleware" (Checks request rate)
                           │
                           ▼
- 6. Middleware #2: "auth-middleware" (Validates HTTP Basic Auth header)
+ 6. Middleware #2: "auth-middleware" (Validates HTTP Basic Auth header or forwardAuth)
                           │
                           ▼
  7. TraefikService: "canary-app-service" (Splits traffic: 90% V1 / 10% V2)
