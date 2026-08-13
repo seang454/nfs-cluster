@@ -267,3 +267,64 @@ Below is the exact step-by-step lifecycle showing **who triggers the command**, 
 | **Phase 5: Client Write** | Application Code | Linux Kernel Network Stack | Container -> Worker Node | NFSv4 TCP RPC packets sent over network to `10.146.0.11:2049` |
 | **Phase 6: Disk Persistence**| Pacemaker VIP | `nfs-ganesha` -> `nfs-ganesha-ceph` -> Ceph OSD | Storage Gateway Tier (`haproxy-1`) | Data written across 3x replicated BlueStore `/dev/sdb` disks |
 
+---
+
+## 🔬 Deep-Dive: What Happens on the Node File System (Phase 4 Detailed)
+
+When Kubernetes mounts an NFS share onto a worker node, it performs a 3-step filesystem mechanism on the node OS:
+
+### 1. The Exact Path on the Worker Node OS
+Kubernetes (`kubelet`) creates a specific, isolated directory on the worker node's root file system using this path structure:
+
+```text
+/var/lib/kubelet/pods/<POD-UUID>/volumes/kubernetes.io~nfs/<VOLUME-NAME>
+```
+
+**Real Example**:
+```text
+/var/lib/kubelet/pods/a3b819e2-4f11-419b-8e2a-71829abc1234/volumes/kubernetes.io~nfs/register-vol
+```
+
+---
+
+### 2. How `kubelet` Executes the OS Mount
+The `kubelet` daemon running on the host OS invokes the Linux kernel mount command using **`nfs-common`** drivers:
+
+```bash
+# Executed by kubelet under the hood on the Worker Node OS:
+sudo mount -t nfs4 -o soft,timeo=300 \
+  10.146.0.11:/data/default-my-pvc-pvc-12345 \
+  /var/lib/kubelet/pods/a3b819e2-4f11-419b-8e2a-71829abc1234/volumes/kubernetes.io~nfs/register-vol
+```
+
+If you SSH into the worker node OS while the Pod is running and inspect `/var/lib/kubelet/pods/a3b819e2.../volumes/kubernetes.io~nfs/register-vol`, you will see the exact contents of the NFS share!
+
+---
+
+### 3. How the Host Directory Is Connected to the Container (Linux Bind Mount)
+Once the NFS share is mounted on the host OS at `/var/lib/kubelet/pods/...`, the container runtime (`containerd` / `docker`) connects it to the container using **Linux Mount Namespaces & Bind Mounts**:
+
+```text
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│ WORKER NODE HOST OS FILE SYSTEM                                                             │
+│                                                                                             │
+│  Path: /var/lib/kubelet/pods/a3b8.../volumes/kubernetes.io~nfs/register-vol               │
+│        (Mounted to NFS Server 10.146.0.11:/data/default-my-pvc-pvc-12345)                   │
+└──────────────────────────────────────────────┬──────────────────────────────────────────────┘
+                                               │
+                                               │ (Linux Kernel `--bind` Mount Namespace)
+                                               ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│ CONTAINER INSIDE THE POD                                                                    │
+│                                                                                             │
+│  Path: /app/data                                                                            │
+│        (Sees files locally, but writes pass directly through host mount to NFS!)            │
+└─────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Summary of the Flow:
+1. `kubelet` mounts NFS to `/var/lib/kubelet/pods/<pod-id>/volumes/kubernetes.io~nfs/<vol-name>`.
+2. Container runtime bind-mounts that directory into `/app/data` inside the container.
+3. The application writes to `/app/data` -> passes through `/var/lib/kubelet/...` -> travels over network TCP 2049 -> saved on NFS Server disks!
+
+
