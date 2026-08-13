@@ -327,4 +327,35 @@ Once the NFS share is mounted on the host OS at `/var/lib/kubelet/pods/...`, the
 2. Container runtime bind-mounts that directory into `/app/data` inside the container.
 3. The application writes to `/app/data` -> passes through `/var/lib/kubelet/...` -> travels over network TCP 2049 -> saved on NFS Server disks!
 
+---
+
+## ⚡ PV Creation Timeline: Dynamic vs. Static Provisioning
+
+### 1. Dynamic Provisioning (Your `nfs-client` Setup) ⭐
+**YES! The PV is created AUTOMATICALLY after you create the PVC.**
+
+```text
+[ Developer creates PVC ] ──> [ StorageClass calls Provisioner ] ──> [ PV created & bound AUTOMATICALLY ]
+      (Step 1)                            (Step 2)                                (Step 3)
+```
+
+* You **only** apply `pvc.yaml`.
+* The `nfs-client-provisioner` pod sees the PVC, creates the NFS subfolder, and **automatically generates the `PersistentVolume` (PV) object in Kubernetes for you**.
+* You never need to write or apply a `pv.yaml` manifest.
+
+---
+
+### 2. Static Provisioning (Old / Manual Method)
+In static provisioning (without a dynamic provisioner pod), the creation order is reversed:
+
+```text
+[ Admin creates PV manually ] ──> [ Developer creates PVC ] ──> [ K8s binds existing PV to PVC ]
+         (Step 1)                         (Step 2)                          (Step 3)
+```
+
+* An Admin must write and apply `pv.yaml` manually **first**.
+* Then a Developer applies `pvc.yaml`.
+* Kubernetes matches the PVC to the pre-existing static PV.
+
+
 
