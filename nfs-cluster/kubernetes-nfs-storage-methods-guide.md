@@ -203,3 +203,67 @@ These parameters bridge the communication between Client and Server:
 * **Virtual IP (VIP)**: E.g., `10.146.0.11` (or `10.148.0.12`). Managed by Pacemaker on the server, targeted by Kubelet/NFS drivers on the client.
 * **NFS Protocol & Port**: NFSv4 protocol communicating over **TCP Port 2049**.
 * **NFS Pseudo Export Path**: The shared top-level export folder defined on the server (e.g., `/data` or `/opt/nfs/data`) and mounted by clients.
+
+---
+
+## 🔄 End-to-End Step-by-Step Execution Sequence (From User Request to Disk Write)
+
+Below is the exact step-by-step lifecycle showing **who triggers the command**, **which tool executes it**, and **where it is processed**:
+
+```text
+┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ PHASE 1: Cluster Setup & Groundwork (DevOps Admin)                                                                │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ [1. Admin runs Ansible/Terraform] ──> Installs Ceph + NFS-Ganesha on Servers & nfs-common on K8s Worker Nodes
+                                   ──> Deploys StorageClass (nfs-client) & Provisioner Pod into K8s
+
+┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ PHASE 2: Application Developer Requests Storage                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ [2. Developer] ──> Runs: `kubectl apply -f pvc.yaml` (Requests 5GB storage via storageClassName: nfs-client)
+
+┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ PHASE 3: Dynamic Provisioning (Kubernetes Controller)                                                             │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ [3. K8s API] ──> Notifies `nfs-client-provisioner` Pod
+ [4. Provisioner Pod] ──> Connects to NFS Server VIP (10.146.0.11) over TCP 2049
+                      ──> Creates folder: `/data/default-my-pvc-pvc-12345/`
+                      ──> Registers PV object in K8s and binds it to PVC
+
+┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ PHASE 4: Application Pod Mount & Scheduling (Kubelet & OS)                                                       │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ [5. Developer] ──> Runs: `kubectl apply -f pod.yaml` (References PVC)
+ [6. K8s Scheduler] ──> Assigns Pod to `Worker-Node-2`
+ [7. Kubelet on Worker-Node-2] ──> Calls Linux Kernel via `nfs-common` (`mount.nfs4`)
+                                ──> Mounts `10.146.0.11:/data/default-my-pvc-pvc-12345` onto node file system
+                                ──> Passes mount into container at `/app/data`
+
+┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ PHASE 5: Application File Write (Client -> Network)                                                               │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ [8. App Container] ──> Executes write: `echo "hello" > /app/data/file.txt`
+ [9. Host Linux Kernel] ──> `nfs-common` driver converts file write into NFSv4 RPC packets
+                        ──> Transmits TCP packets over port 2049 to VIP `10.146.0.11`
+
+┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ PHASE 6: Server Persistence (NFS Gateway -> CephFS -> Disk)                                                       │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ [10. Pacemaker VIP] ──> Forwards TCP 2049 packets to Active Gateway (`haproxy-1`)
+ [11. nfs-ganesha] ──> Receives NFSv4 write request
+ [12. nfs-ganesha-ceph] ──> Translates NFS write call to CephFS C-library (`libcephfs.so`)
+ [13. Ceph MDS] ──> Updates directory metadata for `/default-my-pvc-pvc-12345/file.txt`
+ [14. Ceph OSD Daemons] ──> Writes 3x replicated BlueStore data blocks directly to `/dev/sdb` physical disks!
+```
+
+### 📋 Phase-by-Phase Details Table
+
+| Phase | Who / What triggers it? | Which Tool / Software executes it? | Where does it execute? | Action Output |
+| :--- | :--- | :--- | :--- | :--- |
+| **Phase 1: Setup** | DevOps Admin | Ansible / `cephadm` / `apt install` | Storage Nodes & K8s Master | NFS-Ganesha & Ceph cluster ready; `nfs-common` installed |
+| **Phase 2: PVC Request** | Developer | `kubectl apply -f pvc.yaml` | K8s Control Plane API | Unbound PVC created in K8s API |
+| **Phase 3: Provisioning** | K8s API | `nfs-client-provisioner` Pod | `kube-system` namespace | Subfolder created on NFS export; PV created & bound |
+| **Phase 4: Node Mounting** | K8s Kubelet | Linux `nfs-common` (`mount.nfs4`) | K8s Worker Node OS | Remote NFS folder attached to local node file system |
+| **Phase 5: Client Write** | Application Code | Linux Kernel Network Stack | Container -> Worker Node | NFSv4 TCP RPC packets sent over network to `10.146.0.11:2049` |
+| **Phase 6: Disk Persistence**| Pacemaker VIP | `nfs-ganesha` -> `nfs-ganesha-ceph` -> Ceph OSD | Storage Gateway Tier (`haproxy-1`) | Data written across 3x replicated BlueStore `/dev/sdb` disks |
+
