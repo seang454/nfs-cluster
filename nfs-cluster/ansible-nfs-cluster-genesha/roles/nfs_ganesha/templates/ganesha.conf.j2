@@ -1,10 +1,15 @@
+NFS_Core_Param {
+    NFS_Port = 2049;
+    Protocols = 3,4;
+}
+
 EXPORT {
     Export_Id = {{ nfs_export_id }};
     Path = /;
     Pseudo = {{ nfs_export_path }};
     Access_Type = RW;
     Squash = No_Root_Squash;
-    Protocols = 4;
+    Protocols = 3,4;
     Transports = TCP;
 
     FSAL {

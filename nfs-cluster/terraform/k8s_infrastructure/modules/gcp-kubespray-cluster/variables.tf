@@ -101,6 +101,12 @@ variable "zones" {
   default     = []
 }
 
+variable "nfs_zones" {
+  description = "Optional explicit GCP zones for NFS storage nodes to pin persistent data disks to their existing zones."
+  type        = list(string)
+  default     = []
+}
+
 variable "auto_discover_up_zones" {
   description = "When true, Terraform asks GCP for zones with status UP before building the node plan."
   type        = bool
@@ -121,6 +127,12 @@ variable "blocked_zones" {
 
 variable "blocked_regions" {
   description = "GCP regions to skip after a resource pool is exhausted."
+  type        = list(string)
+  default     = []
+}
+
+variable "blocked_machine_types" {
+  description = "List of machine types to skip/block if they suffer from GCP capacity stockouts or availability issues."
   type        = list(string)
   default     = []
 }
@@ -150,7 +162,13 @@ variable "worker_machine_types" {
 variable "fallback_machine_types" {
   description = "Fallback machine types to try if primary machine type is unavailable."
   type        = list(string)
-  default     = ["n2-standard-2", "n1-standard-2", "e2-standard-4", "e2-highcpu-2", "e2-highmem-2"]
+  default     = ["n1-standard-1", "e2-medium", "e2-small", "g1-small"]
+}
+
+variable "max_fallback_machine_cpus" {
+  description = "Maximum vCPU size allowed for fallback machine types (e.g., 2 or 4) to prevent exceeding GCP project quota limits."
+  type        = number
+  default     = 4
 }
 
 variable "random_resource_type" {

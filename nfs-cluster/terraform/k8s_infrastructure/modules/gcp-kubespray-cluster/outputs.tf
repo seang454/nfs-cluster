@@ -6,7 +6,7 @@ output "control_plane_nodes" {
       instance_name    = node.instance_name
       zone             = node.zone
       machine_type     = node.machine_type
-      public_ip        = google_compute_address.this[node.name].address
+      public_ip        = one(google_compute_instance.this[node.name].network_interface[0].access_config[*].nat_ip)
       private_ip       = google_compute_instance.this[node.name].network_interface[0].network_ip
       etcd_member_name = node.name
     }
@@ -21,7 +21,7 @@ output "worker_nodes" {
       instance_name = node.instance_name
       zone          = node.zone
       machine_type  = node.machine_type
-      public_ip     = google_compute_address.this[node.name].address
+      public_ip     = one(google_compute_instance.this[node.name].network_interface[0].access_config[*].nat_ip)
       private_ip    = google_compute_instance.this[node.name].network_interface[0].network_ip
     }
   ]
@@ -35,7 +35,7 @@ output "nfs_nodes" {
       instance_name = node.instance_name
       zone          = node.zone
       machine_type  = node.machine_type
-      public_ip     = google_compute_address.this[node.name].address
+      public_ip     = one(google_compute_instance.this[node.name].network_interface[0].access_config[*].nat_ip)
       private_ip    = google_compute_instance.this[node.name].network_interface[0].network_ip
     }
   ]
@@ -49,7 +49,7 @@ output "all_nodes" {
       role          = node.role
       zone          = node.zone
       machine_type  = node.machine_type
-      public_ip     = google_compute_address.this[node.name].address
+      public_ip     = one(google_compute_instance.this[node.name].network_interface[0].access_config[*].nat_ip)
       private_ip    = google_compute_instance.this[node.name].network_interface[0].network_ip
     }
   }
@@ -57,12 +57,12 @@ output "all_nodes" {
 
 output "control_plane_public_ips" {
   description = "Control plane external IP addresses."
-  value       = [for node in local.control_plane_nodes : google_compute_address.this[node.name].address]
+  value       = [for node in local.control_plane_nodes : one(google_compute_instance.this[node.name].network_interface[0].access_config[*].nat_ip)]
 }
 
 output "worker_public_ips" {
   description = "Worker external IP addresses."
-  value       = [for node in local.worker_nodes : google_compute_address.this[node.name].address]
+  value       = [for node in local.worker_nodes : one(google_compute_instance.this[node.name].network_interface[0].access_config[*].nat_ip)]
 }
 
 output "control_plane_private_ips" {

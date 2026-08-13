@@ -1,6 +1,6 @@
 # Managed by Ansible - DO NOT EDIT MANUALLY
 127.0.0.1   localhost
-127.0.1.1   {{ inventory_hostname }}
+
 
 # Ceph / NFS Storage Nodes (Using Internal VPC IPs)
 {% for host in groups['ceph_nodes'] %}

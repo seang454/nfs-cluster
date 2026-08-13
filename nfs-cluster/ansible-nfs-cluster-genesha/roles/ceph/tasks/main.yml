@@ -35,6 +35,13 @@
     owner: root
     group: root
 
+- name: Patch cephadm AppArmor line parsing bug on Ubuntu Noble
+  ansible.builtin.shell: "find /usr/sbin /var/lib/ceph -name 'cephadm*' -exec sed -i 's/item, mode = line\\.split(\\x27 \\x27)/parts = line.strip().split(); item, mode = parts[0], parts[-1]/g' {} +"
+  when: ansible_distribution_release == 'noble'
+  failed_when: false
+  changed_when: false
+
+
 # ========== STEP 4: Add Ceph repo on ALL nodes ==========
 # Skip on Ubuntu 24.04 (Noble) since Ubuntu 24.04 includes Ceph natively
 # and upstream Ceph server does not host a separate noble repository folder.

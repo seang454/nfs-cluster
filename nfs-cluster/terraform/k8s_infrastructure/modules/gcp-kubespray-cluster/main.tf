@@ -41,10 +41,17 @@ locals {
 
   fallback_machine_candidates = distinct(compact(concat(
     var.fallback_machine_types,
-    contains(var.random_resource_type, "Standard") ? ["n2d-standard-2", "n1-standard-2", "e2-standard-4"] : [],
-    contains(var.random_resource_type, "High CPU") ? ["e2-highcpu-2", "n2-highcpu-2"] : [],
-    contains(var.random_resource_type, "High Memory") ? ["e2-highmem-2", "n2-highmem-2"] : []
+    contains(var.random_resource_type, "Standard") ? ["n1-standard-1", "e2-medium", "e2-small", "g1-small"] : [],
+    contains(var.random_resource_type, "High CPU") ? ["e2-highcpu-2"] : [],
+    contains(var.random_resource_type, "High Memory") ? ["e2-highmem-2"] : []
   )))
+
+  usable_fallback_machines = [
+    for m in local.fallback_machine_candidates : m
+    if !contains(var.blocked_machine_types, m)
+  ]
+
+  default_fallback_machine = length(local.usable_fallback_machines) > 0 ? local.usable_fallback_machines[0] : "n1-standard-1"
 
   control_plane_nodes = [
     for index in range(var.control_plane_count) : {
@@ -55,7 +62,9 @@ locals {
       global_index      = index
       zone              = local.effective_zones[index % length(local.effective_zones)]
       region            = replace(local.effective_zones[index % length(local.effective_zones)], "/-[a-z]$/", "")
-      machine_type      = var.control_plane_machine_types[min(index, length(var.control_plane_machine_types) - 1)]
+      machine_type      = contains(var.blocked_machine_types, var.control_plane_machine_types[min(index, length(var.control_plane_machine_types) - 1)]) ? (
+        length(local.usable_fallback_machines) > 0 ? local.usable_fallback_machines[index % length(local.usable_fallback_machines)] : local.default_fallback_machine
+      ) : var.control_plane_machine_types[min(index, length(var.control_plane_machine_types) - 1)]
       boot_disk_size_gb = var.control_plane_boot_disk_size_gb
       has_secondary_disk= false
     }
@@ -70,11 +79,15 @@ locals {
       global_index      = var.control_plane_count + index
       zone              = local.effective_zones[(var.control_plane_count + index) % length(local.effective_zones)]
       region            = replace(local.effective_zones[(var.control_plane_count + index) % length(local.effective_zones)], "/-[a-z]$/", "")
-      machine_type      = var.worker_machine_types[min(index, length(var.worker_machine_types) - 1)]
+      machine_type      = contains(var.blocked_machine_types, var.worker_machine_types[min(index, length(var.worker_machine_types) - 1)]) ? (
+        length(local.usable_fallback_machines) > 0 ? local.usable_fallback_machines[(var.control_plane_count + index) % length(local.usable_fallback_machines)] : local.default_fallback_machine
+      ) : var.worker_machine_types[min(index, length(var.worker_machine_types) - 1)]
       boot_disk_size_gb = var.worker_boot_disk_size_gb
       has_secondary_disk= false
     }
   ]
+
+  nfs_effective_zones = length(var.nfs_zones) > 0 ? var.nfs_zones : local.effective_zones
 
   nfs_nodes = [
     for index in range(var.nfs_count) : {
@@ -83,9 +96,11 @@ locals {
       role              = "nfs"
       node_index        = index
       global_index      = var.control_plane_count + var.worker_count + index
-      zone              = local.effective_zones[(var.control_plane_count + var.worker_count + index) % length(local.effective_zones)]
-      region            = replace(local.effective_zones[(var.control_plane_count + var.worker_count + index) % length(local.effective_zones)], "/-[a-z]$/", "")
-      machine_type      = var.nfs_machine_types[min(index, length(var.nfs_machine_types) - 1)]
+      zone              = local.nfs_effective_zones[index % length(local.nfs_effective_zones)]
+      region            = replace(local.nfs_effective_zones[index % length(local.nfs_effective_zones)], "/-[a-z]$/", "")
+      machine_type      = contains(var.blocked_machine_types, var.nfs_machine_types[min(index, length(var.nfs_machine_types) - 1)]) ? (
+        length(local.usable_fallback_machines) > 0 ? local.usable_fallback_machines[(var.control_plane_count + var.worker_count + index) % length(local.usable_fallback_machines)] : local.default_fallback_machine
+      ) : var.nfs_machine_types[min(index, length(var.nfs_machine_types) - 1)]
       boot_disk_size_gb = var.nfs_boot_disk_size_gb
       has_secondary_disk= true
     }
@@ -94,22 +109,30 @@ locals {
   nodes         = concat(local.control_plane_nodes, local.worker_nodes, local.nfs_nodes)
   nodes_by_name = { for node in local.nodes : node.name => node }
   nfs_nodes_by_name = { for node in local.nfs_nodes : node.name => node }
+  control_plane_nodes_by_name = { for node in local.control_plane_nodes : node.name => node }
 
   ssh_public_key = trimspace(var.ssh_public_key) != "" ? trimspace(var.ssh_public_key) : trimspace(file(pathexpand(var.ssh_public_key_path)))
 }
 
 resource "terraform_data" "preflight" {
   input = {
-    configured_zones = local.configured_zones
-    usable_zones     = local.usable_zones
-    blocked_zones    = var.blocked_zones
-    blocked_regions  = var.blocked_regions
+    configured_zones      = local.configured_zones
+    usable_zones          = local.usable_zones
+    blocked_zones         = var.blocked_zones
+    blocked_regions       = var.blocked_regions
+    blocked_machine_types = var.blocked_machine_types
+    usable_fallbacks      = local.usable_fallback_machines
   }
 
   lifecycle {
     precondition {
       condition     = length(local.usable_zones) > 0
       error_message = "No usable GCP zones remain. Remove values from blocked_zones/blocked_regions or add more zones."
+    }
+
+    precondition {
+      condition     = length(local.usable_fallback_machines) > 0 || length(var.blocked_machine_types) == 0
+      error_message = "All fallback machine types are blocked. Remove entries from blocked_machine_types or add candidates to fallback_machine_types."
     }
   }
 }
@@ -126,10 +149,14 @@ resource "google_compute_disk" "ceph_osd" {
   labels = merge(var.labels, {
     purpose = "ceph-osd"
   })
+
+  lifecycle {
+    prevent_destroy = false
+  }
 }
 
 resource "google_compute_address" "this" {
-  for_each = local.nodes_by_name
+  for_each = local.control_plane_nodes_by_name
 
   name   = "${each.value.instance_name}-ip"
   region = each.value.region
@@ -175,7 +202,7 @@ resource "google_compute_instance" "this" {
     subnetwork = var.subnetwork
 
     access_config {
-      nat_ip = google_compute_address.this[each.key].address
+      // Ephemeral external IP assigned to every node
     }
   }
 

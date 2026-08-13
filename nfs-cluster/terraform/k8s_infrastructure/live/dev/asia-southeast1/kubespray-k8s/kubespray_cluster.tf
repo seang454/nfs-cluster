@@ -11,10 +11,12 @@ module "kubespray_cluster" {
   nfs_name_prefix                 = var.nfs_name_prefix
   zone                            = var.zone
   zones                           = var.zones
+  nfs_zones                       = var.nfs_zones
   auto_discover_up_zones          = var.auto_discover_up_zones
   fallback_regions                = var.fallback_regions
   blocked_zones                   = var.blocked_zones
   blocked_regions                 = var.blocked_regions
+  blocked_machine_types           = var.blocked_machine_types
   control_plane_machine_types     = var.control_plane_machine_types
   worker_machine_types            = var.worker_machine_types
   nfs_machine_types               = var.nfs_machine_types
@@ -36,6 +38,7 @@ module "kubespray_cluster" {
   internal_source_ranges          = var.internal_source_ranges
   kubernetes_api_source_ranges    = var.kubernetes_api_source_ranges
   nodeport_source_ranges          = var.nodeport_source_ranges
+  network_tags                    = var.network_tags
   custom_firewall_rules           = var.custom_firewall_rules
 
   labels = {

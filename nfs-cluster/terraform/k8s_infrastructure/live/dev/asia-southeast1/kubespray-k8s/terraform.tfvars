@@ -1,6 +1,11 @@
+# Backend Storage Toggle: set use_gcs_backend = true for GCS Cloud Storage, or false for Local Storage
+use_gcs_backend  = false
+gcs_bucket_name  = "project-469c6b81-55a1-4508-830-tfstate-bbdcad0e"
+local_state_path = "../../../../state/dev/asia-southeast1/kubespray-k8s.tfstate"
+
 project_id = "project-469c6b81-55a1-4508-830"
-region     = "asia-southeast1"
-zone       = "asia-southeast1-a"
+region     = "asia-east1"
+zone       = "asia-east1-a"
 
 # Kubespray cluster size.
 control_plane_count = 3
@@ -15,29 +20,37 @@ control_plane_name_prefix = "master"
 worker_name_prefix        = "worker"
 nfs_name_prefix           = "haproxy"
 
-# Terraform spreads nodes across these zones in order.
+# Terraform spreads nodes across these zones in order (4 in asia-east1, 4 in asia-northeast1).
 zones = [
-  "asia-southeast1-a",
-  "asia-southeast1-b",
-  "asia-southeast1-c"
+  "asia-east1-a",
+  "asia-east1-b",
+  "asia-east1-c",
+  "asia-northeast1-a",
+  "asia-east1-a"
+]
+
+# Dedicated zones for NFS storage nodes in asia-northeast1
+nfs_zones = [
+  "asia-northeast1-a",
+  "asia-northeast1-b",
+  "asia-northeast1-c"
 ]
 
 auto_discover_up_zones = true
 
 fallback_regions = [
-  "asia-east1",
-  "asia-northeast1"
+  "asia-east1"
 ]
 
-blocked_zones   = []
-blocked_regions = []
+blocked_zones         = []
+blocked_regions       = []
+blocked_machine_types = []
 
 # Recommended: empty means Google automatically discovers ADC for whichever
 # user runs Terraform after `gcloud auth application-default login`.
 gcp_adc_file = ""
 
 # Machine types are matched by node index.
-# e2-medium (1 vCPU, 4GB RAM) allows all 8 nodes (3 master + 2 worker + 3 nfs) to fit within GCP's 12 vCPU global quota (8 vCPUs total).
 control_plane_machine_types = [
   "e2-medium"
 ]
@@ -51,9 +64,9 @@ nfs_machine_types = [
 ]
 
 fallback_machine_types = [
-  "e2-medium",
-  "e2-standard-2",
-  "n2d-standard-2"
+  "n1-standard-1",
+  "e2-small",
+  "g1-small"
 ]
 
 random_resource_type = [
@@ -65,10 +78,10 @@ random_resource_type = [
 desired_status = "RUNNING"
 
 image                           = "ubuntu-os-cloud/ubuntu-2404-lts-amd64"
-control_plane_boot_disk_size_gb = 50
-worker_boot_disk_size_gb        = 50
-nfs_boot_disk_size_gb           = 50
-nfs_data_disk_size_gb           = 50
+control_plane_boot_disk_size_gb = 20
+worker_boot_disk_size_gb        = 20
+nfs_boot_disk_size_gb           = 20
+nfs_data_disk_size_gb           = 25
 boot_disk_type                  = "pd-balanced"
 
 network    = "default"
@@ -97,41 +110,20 @@ kubernetes_api_source_ranges = ["0.0.0.0/0"]
 internal_source_ranges = ["10.0.0.0/8"]
 
 # Leave empty unless you intentionally expose Kubernetes NodePorts publicly.
-nodeport_source_ranges = []
+# Network tags applied to every VM instance (enables default-allow-http and default-allow-https)
+network_tags = ["http-server", "https-server"]
 
 # ---------------------------------------------------------------------------
 # Custom firewall rules
 # ---------------------------------------------------------------------------
-# Add entries here to open any extra port on the cluster VMs.
-# Each entry creates one GCP firewall rule.
-#
-# target: "all"           -> applies to every cluster node
-#         "control_plane" -> applies to control plane nodes only
-#         "worker"        -> applies to worker nodes only
-#
-# Examples:
-#
-# custom_firewall_rules = [
-#   {
-#     name          = "http-https"
-#     protocol      = "tcp"
-#     ports         = ["80", "443"]
-#     source_ranges = ["0.0.0.0/0"]
-#     target        = "all"
-#   },
-#   {
-#     name          = "prometheus-node-exporter"
-#     protocol      = "tcp"
-#     ports         = ["9100"]
-#     source_ranges = ["10.0.0.0/8"]
-#     target        = "all"
-#   },
-#   {
-#     name          = "etcd"
-#     protocol      = "tcp"
-#     ports         = ["2379", "2380"]
-#     source_ranges = ["10.0.0.0/8"]
-#     target        = "control_plane"
-#   },
-# ]
-custom_firewall_rules = []
+# Open HTTP (80) and HTTPS (443) on all cluster nodes for ingress controllers / web traffic.
+custom_firewall_rules = [
+  {
+    name          = "allow-http-https"
+    protocol      = "tcp"
+    ports         = ["80", "443"]
+    source_ranges = ["0.0.0.0/0"]
+    target        = "all"
+  }
+]
+

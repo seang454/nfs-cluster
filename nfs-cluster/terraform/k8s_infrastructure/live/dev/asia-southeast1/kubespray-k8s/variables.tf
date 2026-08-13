@@ -1,3 +1,21 @@
+variable "use_gcs_backend" {
+  description = "Set to true to use Cloud GCS state storage, or false to use local state storage."
+  type        = bool
+  default     = false
+}
+
+variable "gcs_bucket_name" {
+  description = "The GCS bucket name used when use_gcs_backend is true."
+  type        = string
+  default     = ""
+}
+
+variable "local_state_path" {
+  description = "Custom local file path for storing Terraform state when use_gcs_backend is false."
+  type        = string
+  default     = "../../../../state/dev/asia-southeast1/kubespray-k8s.tfstate"
+}
+
 variable "project_id" {
   description = "GCP project ID."
   type        = string
@@ -100,6 +118,12 @@ variable "zones" {
   default     = []
 }
 
+variable "nfs_zones" {
+  description = "Optional explicit GCP zones for NFS storage nodes to pin persistent data disks to their existing zones."
+  type        = list(string)
+  default     = []
+}
+
 variable "auto_discover_up_zones" {
   description = "When true, Terraform asks GCP for zones with status UP before building the node plan."
   type        = bool
@@ -124,6 +148,12 @@ variable "blocked_regions" {
   default     = []
 }
 
+variable "blocked_machine_types" {
+  description = "List of machine types to skip/block if they suffer from GCP capacity stockouts or availability issues."
+  type        = list(string)
+  default     = []
+}
+
 variable "control_plane_machine_types" {
   description = "Machine types for control plane nodes by index. If there are more nodes than values, Terraform reuses the last value."
   type        = list(string)
@@ -139,7 +169,7 @@ variable "worker_machine_types" {
 variable "fallback_machine_types" {
   description = "Fallback machine types to try if primary machine type is unavailable."
   type        = list(string)
-  default     = ["n2-standard-2", "n1-standard-2", "e2-standard-4", "e2-highcpu-2", "e2-highmem-2"]
+  default     = ["n1-standard-1", "e2-medium", "e2-small", "g1-small"]
 }
 
 variable "random_resource_type" {
@@ -230,6 +260,13 @@ variable "nodeport_source_ranges" {
   type        = list(string)
   default     = []
 }
+
+variable "network_tags" {
+  description = "Additional GCP network tags to apply to every Kubernetes VM (e.g. http-server, https-server)."
+  type        = list(string)
+  default     = ["http-server", "https-server"]
+}
+
 
 variable "kubespray_inventory_path" {
   description = "Path where Terraform writes the generated Kubespray inventory file (used by Kubespray cluster.yml)."
