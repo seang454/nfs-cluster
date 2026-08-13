@@ -633,3 +633,104 @@ cephfs_data/100000001f7.00000000 mtime 2026-08-13T06:47:15.000000+0000, size 192
      ├── osd.1 on haproxy-2 (Replica 1)
      └── osd.2 on haproxy-3 (Replica 2)
 ```
+
+---
+
+## 🌐 Deep-Dive: What is `/data`, Where Does It Stay, and Network Export Paths?
+
+### 1️⃣ What is `/data` and Where Does It Stay?
+
+* **`/data` is a Virtual Network Address (NFS Export Handle)**:
+  * Think of `/data` like a **website URL** (e.g., `http://storage-server/data`).
+  * It does **NOT** exist as a normal Linux folder on `/dev/root` of `haproxy-1`.
+  * Instead, `/data` is a **virtual network alias** managed in memory by the **NFS-Ganesha** daemon.
+
+* **Where does the content of `/data` actually stay?**:
+  * The actual content of `/data` lives inside **CephFS**, stored as **3x replicated binary objects** on the physical disks (**`/dev/sdb`**) across `haproxy-1`, `haproxy-2`, and `haproxy-3`.
+
+---
+
+### 2️⃣ What Happens When `nfs-client-provisioner` Creates a Folder?
+
+When this step executes in Kubernetes:
+
+```text
+[Provisioner Pod] ──> Connects to NFS Server VIP (10.146.0.11) over TCP 2049
+                  ──> Creates folder: `/data/default-my-pvc-pvc-12345/`
+```
+
+Here is the exact step-by-step mechanism:
+
+```text
+1. PROVISIONER CONTAINER              2. NETWORK LAYER                     3. STORAGE SERVER (haproxy-1)
+┌───────────────────────────┐        ┌─────────────────────────┐          ┌───────────────────────────────────┐
+│ Runs inside container:    │        │ NFS `CREATE` RPC Packet │          │ NFS-Ganesha receives request      │
+│ `mkdir                    │ ─────> │ over TCP Port 2049 to   │ ───────> │ Translates `/data` to CephFS Root │
+│ /persistentvolumes/       │        │ `10.146.0.11`           │          │ Calls `libcephfs.so`              │
+│ default-my-pvc-pvc-12345` │        └─────────────────────────┘          └─────────────────┬─────────────────┘
+└───────────────────────────┘                                                                │
+                                                                                             ▼
+                                                                          4. CEPH PHYSICAL DISKS (/dev/sdb)
+                                                                          ┌───────────────────────────────────┐
+                                                                          │ Creates directory inode in        │
+                                                                          │ `cephfs_metadata` pool & saves    │
+                                                                          │ 3x replicated binary objects!     │
+                                                                          └───────────────────────────────────┘
+```
+
+#### Step-by-Step Flow:
+1. **Provisioner Container**: The provisioner pod mounts `10.146.0.11:/data` internally inside its container at `/persistentvolumes`.
+2. **Issues `mkdir`**: It runs `mkdir /persistentvolumes/default-my-pvc-pvc-12345`.
+3. **NFS Network Transmission**: The container sends an NFS `CREATE` network request over TCP 2049 to `10.146.0.11`.
+4. **NFS-Ganesha Processing**: `nfs-ganesha` on `haproxy-1` receives the request for export `/data` and calls CephFS C-libraries (`libcephfs.so`).
+5. **Ceph Metadata Creation**: Ceph creates a new directory entry inside its **`cephfs_metadata`** pool.
+6. **Physical Disk Result**: The folder structure is now established inside CephFS and replicated across the **`/dev/sdb`** SSD disks on `haproxy-1`, `haproxy-2`, and `haproxy-3`.
+
+---
+
+### 3️⃣ How You Can View This Created Folder
+
+Depending on where you look, the folder appears as:
+
+| Layer | Path / Location | How to View It |
+| :--- | :--- | :--- |
+| **Inside Provisioner Container** | `/persistentvolumes/default-my-pvc-pvc-12345/` | `kubectl exec` inside provisioner pod |
+| **Network Export Path** | `10.146.0.11:/data/default-my-pvc-pvc-12345/` | Mount via `mount -t nfs4` |
+| **On any Node (with `/mnt/nfs`)**| `/mnt/nfs/default-my-pvc-pvc-12345/` | `sudo ls -la /mnt/nfs/` |
+| **Ceph Storage Pool** | `cephfs_metadata` directory inode entry | `sudo rados -p cephfs_metadata ls` |
+
+---
+
+### 4️⃣ What is a Network Export Path?
+
+A **Network Export Path** is the **network web-address/URL** exposed by a storage server (like NFS) so that client machines across the network can connect and mount remote storage.
+
+#### 💡 Real-World Analogy:
+* **Local File Path**: `C:\Users\Sean\Documents\file.txt`  
+  *(Only visible to your local machine. No one else on the network can access it).*
+* **Network Export Path**: `10.146.0.11:/data`  
+  *(Like a shared Google Drive link or network share URL. Any authorized machine on the network can connect to it).*
+
+#### 🔍 How It Works in Your Project:
+In your cluster, **`10.146.0.11:/data`** is your **Network Export Path**:
+
+```text
+[ NFS Server IP ]  +  [ Export Name ]  =  [ Network Export Path ]
+  10.146.0.11              /data            10.146.0.11:/data
+```
+
+1. **`10.146.0.11`**: The IP address of your HA NFS Gateway server (Virtual IP).
+2. **`/data`**: The export path/name configured inside NFS-Ganesha ([`ganesha.conf.j2`](file:///home/seang/nfs-cluster/ansible-nfs-cluster-genesha/roles/nfs_ganesha/templates/ganesha.conf.j2#L9)).
+3. **Combined (`10.146.0.11:/data`)**: The complete address that Kubernetes nodes and Pods use to mount storage remotely:
+   ```bash
+   mount -t nfs4 10.146.0.11:/data /mnt/nfs
+   ```
+
+#### 📋 Summary Table:
+
+| Term | Example | What it means |
+| :--- | :--- | :--- |
+| **Local Path** | `/var/lib/kubelet` | A folder sitting directly on one machine's hard drive. |
+| **Network Export Path** | `10.146.0.11:/data` | A storage path made available over the network for other machines to connect to. |
+| **Mount Point** | `/mnt/nfs` | The local folder where a client attaches a Network Export Path. |
+
