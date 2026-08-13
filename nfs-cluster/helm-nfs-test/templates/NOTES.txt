@@ -1,0 +1,23 @@
+🎉 NFS FileBrowser Storage Test Chart deployed successfully!
+
+Image: filebrowser/filebrowser:v2.27.0 (~15MB ultra-lightweight web UI)
+
+1. Check the PVC status to confirm dynamic provisioning:
+   kubectl get pvc {{ .Values.storage.pvcName }}
+
+2. Check the PV automatically created by nfs-client:
+   kubectl get pv
+
+3. Access the Web File Manager UI:
+   - NodePort Access: http://<NODE-IP>:{{ .Values.service.nodePort }}
+   - Port Forwarding Access:
+     kubectl port-forward svc/{{ include "nfs-storage-test.fullname" . }} 8080:80
+
+4. Default Web UI Login Credentials:
+   - Username: admin
+   - Password: admin
+
+5. In the Web UI, you can:
+   - View & Edit `welcome-test.txt` (stored directly on your NFS volume)
+   - Upload new files, images, or documents
+   - Create new subfolders to test real-time NFS read/write!

@@ -1,0 +1,20 @@
+# Default values for nfs-storage-test with Filebrowser UI (~15MB ultra-lightweight image).
+
+replicaCount: 1
+
+image:
+  repository: filebrowser/filebrowser
+  pullPolicy: IfNotPresent
+  tag: "v2.27.0"
+
+storage:
+  storageClassName: "nfs-client"
+  accessMode: "ReadWriteMany"
+  size: "1Gi"
+  pvcName: "nfs-test-pvc"
+  mountPath: "/srv"
+
+service:
+  type: NodePort
+  port: 80
+  nodePort: 30080

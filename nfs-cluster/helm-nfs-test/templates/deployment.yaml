@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nfs-storage-test.fullname" . }}
+  labels:
+    app.kubernetes.io/name: {{ include "nfs-storage-test.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "nfs-storage-test.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "nfs-storage-test.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      initContainers:
+        - name: init-write-nfs-test
+          image: busybox:latest
+          command:
+            - sh
+            - -c
+            - |
+              echo "Welcome to HA NFS Storage Cluster File Manager!" > {{ .Values.storage.mountPath }}/welcome-test.txt
+              echo "StorageClass: {{ .Values.storage.storageClassName }}" >> {{ .Values.storage.mountPath }}/welcome-test.txt
+              echo "AccessMode: {{ .Values.storage.accessMode }}" >> {{ .Values.storage.mountPath }}/welcome-test.txt
+              echo "Initialized by Pod: $(hostname) at $(date)" >> {{ .Values.storage.mountPath }}/welcome-test.txt
+              echo "Test file generated successfully inside NFS volume."
+          volumeMounts:
+            - name: nfs-data
+              mountPath: {{ .Values.storage.mountPath }}
+      containers:
+        - name: filebrowser
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 80
+              protocol: TCP
+          volumeMounts:
+            - name: nfs-data
+              mountPath: {{ .Values.storage.mountPath }}
+      volumes:
+        - name: nfs-data
+          persistentVolumeClaim:
+            claimName: {{ .Values.storage.pvcName }}

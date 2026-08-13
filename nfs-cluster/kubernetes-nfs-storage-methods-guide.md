@@ -282,7 +282,7 @@ Kubernetes (`kubelet`) creates a specific, isolated directory on the worker node
 
 **Real Example**:
 ```text
-/var/lib/kubelet/pods/a3b819e2-4f11-419b-8e2a-71829abc1234/volumes/kubernetes.io~nfs/register-vol
+/var/lib/kubelet/pods/b5ac88e8-7b0e-4b08-8f41-287762296903/volumes/kubernetes.io~nfs/pvc-efc064c3-9659-4775-a094-0dbbe460aadb
 ```
 
 ---
