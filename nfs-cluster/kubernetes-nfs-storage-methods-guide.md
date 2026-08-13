@@ -172,3 +172,34 @@ METHOD 3: Dynamic Provisioner + StorageClass (Production Standard)
                                ▼
         [ NFS Export: /opt/nfs/data/default-register-pvc-pvc-12345/ ]
 ```
+
+---
+
+## 🌐 Component Location Matrix: Client vs. Server vs. Network Bridge
+
+To clearly understand where each component lives and operates:
+
+### 1. 💻 CLIENT SIDE ONLY (Kubernetes Worker Nodes & Workload Pods)
+These components run **only** on the Kubernetes client nodes:
+* **`nfs-common` package**: Linux kernel drivers (`mount.nfs4`, `rpcbind`) installed on worker node OS.
+* **Workload Container Mounts**: Mount paths inside application containers (e.g., `/usr/share/nginx/html`, `/app/data`).
+* **Local Node Mount Directory**: Local folder on node OS if mounted manually (e.g., `/mnt/nfs` or `/opt/nfs/data`).
+* **`nfs-client-provisioner` Pod**: Controller pod running in K8s (namespace `kube-system`).
+
+---
+
+### 2. 🖥️ SERVER SIDE ONLY (Storage Nodes & Gateways)
+These components run **only** on your Storage Cluster nodes (`haproxy-1`, `haproxy-2`, `haproxy-3`):
+* **`nfs-ganesha` Daemon**: The NFS server process running in user-space listening for incoming NFS connections.
+* **`nfs-ganesha-ceph` Plugin**: Translates NFS file requests directly into CephFS API calls.
+* **Ceph Storage Cluster**: Daemons (`ceph-mon`, `ceph-mgr`, `ceph-osd`, `ceph-mds`) managing raw disks (`/dev/sdb`).
+* **High Availability Stack**: `pacemaker`, `corosync`, and `pcsd` managing the cluster state and failovers.
+* **Physical Disks & Files**: The physical storage media where your actual files are written and preserved.
+
+---
+
+### 3. 🤝 NETWORK BRIDGE (Interacts Between Client & Server)
+These parameters bridge the communication between Client and Server:
+* **Virtual IP (VIP)**: E.g., `10.146.0.11` (or `10.148.0.12`). Managed by Pacemaker on the server, targeted by Kubelet/NFS drivers on the client.
+* **NFS Protocol & Port**: NFSv4 protocol communicating over **TCP Port 2049**.
+* **NFS Pseudo Export Path**: The shared top-level export folder defined on the server (e.g., `/data` or `/opt/nfs/data`) and mounted by clients.
