@@ -436,6 +436,33 @@ Unlike NFS (File Storage), which presents a pre-formatted network folder with fi
 * **File Storage (NFS)** = Like **Google Drive / Dropbox**. Perfect for multiple users sharing photos, documents, and web assets.
 * **Block Storage (Ceph RBD / Cloud Disk)** = Like plugging a **High-Speed External NVMe SSD** directly into your server. Required for heavy database software.
 
+---
+
+## ⚠️ How to Achieve `ReadWriteMany` (RWX) with Block Storage / Ceph
+
+If you attempt to mount a standard Block Device (formatted with `ext4` or `xfs`) on multiple nodes simultaneously, **IT WILL IMMEDIATELY CORRUPT DATA**. Standard filesystems do not have a network locking manager to inform Node B when Node A alters disk blocks.
+
+Here are the 4 proper engineering solutions if you need shared `ReadWriteMany` storage:
+
+### Solution 1: Use CephFS instead of Ceph RBD ⭐ *(Recommended Native Ceph Way)*
+* **How it works**: Ceph provides **CephFS**, a distributed POSIX filesystem built on top of Ceph storage pools.
+* **Result**: Supports **`ReadWriteMany` (RWX)** natively across hundreds of pods!
+* **Your Architecture**: In your setup ([`HA-NFS-Ceph-Architecture-Guide.md`](file:///home/seang/nfs-cluster/HA-NFS-Ceph-Architecture-Guide.md)), NFS-Ganesha exposes CephFS over NFS, giving your Kubernetes pods full `ReadWriteMany` access.
+
+### Solution 2: Use Application-Level Database Clustering (Best for Databases)
+* **How it works**: Do NOT try to share 1 single block disk between database pods. Instead, deploy a database cluster (e.g. PostgreSQL Patroni, MySQL Galera, or MongoDB Replica Set).
+* **Result**: Each database pod gets its own private Block Disk (`ReadWriteOnce`). The database software handles data synchronization over the network.
+
+### Solution 3: Layer an NFS / Object Gateway on top of Cloud Block Storage
+* **How it works**: Attach a Cloud Disk (GCP PD / AWS EBS) to 1 Gateway Node, run an NFS Server or MinIO Object Store container on that node, and export it over the network to other pods.
+* **Result**: Other pods mount the gateway share as `ReadWriteMany`.
+
+### Solution 4: Use a Clustered Filesystem (GFS2 / OCFS2) *(Advanced)*
+* **How it works**: Format the raw block device with a specialized cluster-aware filesystem like **GFS2** or **OCFS2**.
+* **Result**: Allows multi-node simultaneous block writes via a Distributed Lock Manager (DLM).
+* **Warning**: Extremely complex to maintain in Kubernetes.
+
+
 
 
 
