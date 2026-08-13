@@ -501,6 +501,38 @@ In Kubernetes, **Access Modes** define **how many worker nodes (or pods) can mou
 * **How it works**: Stricter than `RWO`. Even if two pods live on the exact same worker node, Kubernetes will refuse to attach the volume to the second pod.
 * **Why it's used**: Essential for stateful database pods where you want to guarantee 100% exclusive disk ownership.
 
+---
+
+### ❓ FAQ: Do `WriteOnlyMany`, `WriteOnlyOne`, or `ReadOnlyOne` Exist?
+
+**Short Answer**: **NO. Kubernetes does NOT have `WriteOnlyMany`, `WriteOnlyOne`, or `ReadOnlyOne` access modes.**
+
+If you type `WriteOnlyMany` or `WriteOnlyOne` in a PVC manifest, Kubernetes will reject it with a validation error:
+`Unsupported value: "WriteOnlyMany": supported values: "ReadWriteOnce", "ReadOnlyMany", "ReadWriteMany", "ReadWriteOncePod"`.
+
+#### Why Don't "Write-Only" Mount Modes Exist?
+1. **Linux POSIX Requirements**: Operating systems cannot mount a filesystem in "Write-Only" mode. To write a file, the Linux kernel must read directory inodes, file metadata, sector allocations, and file handles. 
+2. **File Permissions vs. Mount Modes**: Write-only permissions exist at the file level (`chmod 0222` or `O_WRONLY` file descriptors), but **not** at the filesystem volume mount level.
+
+#### How to achieve "ReadOnly on 1 Node/Pod" (`ReadOnlyOne`)?
+Kubernetes does not have a separate `ReadOnlyOne` mode name because you can easily achieve this in Pod YAML using the `readOnly: true` setting on a standard `ReadWriteOnce` volume:
+
+```yaml
+spec:
+  containers:
+    - name: my-app
+      image: nginx
+      volumeMounts:
+        - name: my-vol
+          mountPath: /app/data
+          readOnly: true    # <-- Makes a ReadWriteOnce volume Read-Only for this Pod!
+  volumes:
+    - name: my-vol
+      persistentVolumeClaim:
+        claimName: my-rwo-pvc
+```
+
+
 
 
 
