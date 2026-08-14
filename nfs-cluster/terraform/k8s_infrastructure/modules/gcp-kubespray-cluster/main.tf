@@ -156,7 +156,7 @@ resource "google_compute_disk" "ceph_osd" {
 }
 
 resource "google_compute_address" "this" {
-  for_each = local.control_plane_nodes_by_name
+  for_each = local.nodes_by_name
 
   name   = "${each.value.instance_name}-ip"
   region = each.value.region
@@ -202,7 +202,7 @@ resource "google_compute_instance" "this" {
     subnetwork = var.subnetwork
 
     access_config {
-      // Ephemeral external IP assigned to every node
+      nat_ip = google_compute_address.this[each.key].address
     }
   }
 

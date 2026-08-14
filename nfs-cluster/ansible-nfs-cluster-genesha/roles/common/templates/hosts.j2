@@ -4,7 +4,8 @@
 
 # Ceph / NFS Storage Nodes (Using Internal VPC IPs)
 {% for host in groups['ceph_nodes'] %}
-{{ hostvars[host]['ip'] | default(hostvars[host]['ansible_host']) }}   {{ host }}
+{{ hostvars[host]['ip'] | default(hostvars[host]['ansible_host']) }}   {{ host }}{% if host == 'haproxy-1' %} {{ nfs_dns_name | default('nfs-server.internal') }}{% endif %}
+
 {% endfor %}
 
 # Kubernetes / NFS Client Nodes (Using Internal VPC IPs)

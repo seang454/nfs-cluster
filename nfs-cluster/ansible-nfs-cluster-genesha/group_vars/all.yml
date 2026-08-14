@@ -15,7 +15,10 @@
 # NFS Configuration
 # ------------------------------------------
 
-# 🔴 CRITICAL: Private IP of primary NFS storage node (haproxy-1)
+# 🔴 Internal DNS domain name for the NFS storage server (.internal avoids mDNS .local timeout)
+nfs_dns_name: "nfs-server.internal"
+
+# 🔴 Private IP of primary NFS storage node (haproxy-1)
 nfs_vip: "10.146.0.11"
 
 # ⚠️  DO NOT CHANGE after Kubernetes PersistentVolumes reference this path.

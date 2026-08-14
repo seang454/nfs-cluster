@@ -61,7 +61,7 @@
 
 # ========== STEP 6: Bootstrap Ceph cluster on FIRST NODE ONLY ==========
 - name: Bootstrap Ceph cluster
-  ansible.builtin.command: "cephadm bootstrap --mon-ip {{ ip | default(ansible_host) }} --skip-dashboard --skip-monitoring-stack"
+  ansible.builtin.command: "cephadm bootstrap --mon-ip {{ ip | default(ansible_host) }} --cluster-network {{ ceph_public_network | default('10.0.0.0/8') }} --public-network {{ ceph_public_network | default('10.0.0.0/8') }} --skip-dashboard --skip-monitoring-stack"
   args:
     creates: /etc/ceph/ceph.conf
   when: inventory_hostname == groups['ceph_nodes'][0]
