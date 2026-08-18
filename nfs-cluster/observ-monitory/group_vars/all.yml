@@ -1,0 +1,36 @@
+---
+# Observability Global Variables (Testing Configuration)
+
+# Environment
+env_environment: "testing"
+
+# Network & VIP
+observability_vip: "{{ vip_ip | default('10.146.0.11') }}"
+
+# Domain & HTTPS Settings (Traefik Ingress + Cert-Manager)
+grafana_domain: "grafana.seang.shop"
+cert_manager_cluster_issuer: "letsencrypt-prod"
+acme_admin_email: "pengseangsim210@gmail.com"
+ingress_class_name: "traefik"
+
+# Loki S3 Object Storage (MinIO) Settings
+loki_use_s3: true
+loki_s3_endpoint: "csp-minio.nextcloud-prod.svc.cluster.local:9000"
+loki_s3_bucket: "loki-logs"
+loki_s3_access_key: "minioadmin"
+loki_s3_secret_key: "miniopass123"
+
+# Ports
+ceph_exporter_port: 9283
+node_exporter_port: 9100
+ganesha_exporter_port: 9587
+ha_cluster_exporter_port: 9664
+loki_push_port: 3100
+grafana_web_port: 3000
+
+# Kubernetes Storage Settings (Using Cluster's nfs-client provisioner)
+k8s_monitoring_namespace: "monitoring"
+k8s_decoupled_storage_class: "nfs-client"
+prometheus_storage_size: "10Gi"    # Reduced for fast testing (Production: 50Gi+)
+loki_storage_size: "10Gi"          # Reduced for fast testing (Production: 50Gi+)
+prometheus_retention: "24h"        # Short 24h retention for dev/test

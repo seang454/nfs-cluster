@@ -1,0 +1,17 @@
+---
+# tasks file for ceph_observability
+
+- name: Enable Ceph Prometheus Manager module on primary Ceph node
+  ansible.builtin.command: ceph mgr module enable prometheus
+  register: ceph_prom_enable
+  changed_when: "'already enabled' not in ceph_prom_enable.stdout"
+  failed_when: false
+
+- name: Verify Ceph Prometheus Exporter service status
+  ansible.builtin.command: ceph mgr services
+  register: ceph_mgr_services
+  changed_when: false
+
+- name: Display Ceph Exporter service URL
+  ansible.builtin.debug:
+    msg: "Ceph Prometheus metrics available at: {{ ceph_mgr_services.stdout }}"
