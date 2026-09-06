@@ -19,7 +19,8 @@
 nfs_dns_name: "nfs-server.internal"
 
 # 🔴 Private IP of primary NFS storage node (haproxy-1)
-nfs_vip: "10.146.0.15"
+# Defaults dynamically to the IP of the first ceph_nodes host in inventory
+nfs_vip: "{{ hostvars[groups['ceph_nodes'][0]]['ip'] | default(hostvars[groups['ceph_nodes'][0]]['ansible_host']) }}"
 
 # ⚠️  DO NOT CHANGE after Kubernetes PersistentVolumes reference this path.
 #    If you change this, every PV/PVC in your cluster will lose connection

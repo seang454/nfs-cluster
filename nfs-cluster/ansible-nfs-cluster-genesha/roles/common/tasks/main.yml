@@ -27,16 +27,19 @@
     name: chrony
     state: present
 
+- name: Check if chrony daemon is already running
+  ansible.builtin.command: pgrep -x chronyd
+  register: chronyd_running
+  failed_when: false
+  changed_when: false
+
 - name: Enable and start chrony
   systemd:
     name: chronyd
     state: started
     enabled: yes
-  register: chrony_result
-  retries: 3
-  delay: 10
-  until: chrony_result is succeeded
-  ignore_errors: true
+  when: chronyd_running.rc != 0
+  failed_when: false
 
 # ==========================================
 # STEP 3: Keep UFW Firewall Disabled (Default)
