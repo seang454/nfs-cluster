@@ -17,6 +17,7 @@
 - name: Set system hostname to match inventory_hostname
   ansible.builtin.hostname:
     name: "{{ inventory_hostname }}"
+  failed_when: false
 
 # ==========================================
 # STEP 2: Install chrony for time synchronization
@@ -31,6 +32,11 @@
     name: chronyd
     state: started
     enabled: yes
+  register: chrony_result
+  retries: 3
+  delay: 10
+  until: chrony_result is succeeded
+  ignore_errors: true
 
 # ==========================================
 # STEP 3: Keep UFW Firewall Disabled (Default)

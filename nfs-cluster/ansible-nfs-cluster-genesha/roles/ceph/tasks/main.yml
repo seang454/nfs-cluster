@@ -9,15 +9,88 @@
   when: ansible_distribution_release == 'noble'
 
 # ========== STEP 1: Install dependencies on ALL nodes ==========
-- name: Install ceph dependencies
+- name: Install ceph dependencies (non-Docker)
   ansible.builtin.apt:
     name:
       - curl
       - python3
       - lvm2
-      - docker.io
     state: present
-    update_cache: yes
+
+- name: Install docker.io (available on Ubuntu < Noble)
+  ansible.builtin.apt:
+    name: docker.io
+    state: present
+  when: ansible_distribution_release != 'noble'
+
+- name: Install Docker CE from official repo on Ubuntu Noble
+  when: ansible_distribution_release == 'noble'
+  block:
+    - name: Install Docker prerequisites
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - gnupg
+        state: present
+
+    - name: Create /etc/apt/keyrings directory
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Add Docker GPG key
+      ansible.builtin.shell: |
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor --yes -o /etc/apt/keyrings/docker.gpg
+        chmod a+r /etc/apt/keyrings/docker.gpg
+      args:
+        creates: /etc/apt/keyrings/docker.gpg
+
+    - name: Add Docker apt repository for Ubuntu Noble
+      ansible.builtin.copy:
+        content: |
+          deb [arch={{ ansible_architecture | replace('x86_64', 'amd64') | replace('aarch64', 'arm64') }} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu noble stable
+        dest: /etc/apt/sources.list.d/docker.list
+        mode: '0644'
+
+    - name: Update apt cache after adding Docker repo
+      ansible.builtin.apt:
+        update_cache: yes
+
+    - name: Install Docker CE
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+        state: present
+
+# ========== STEP 1.5: Deep Zap & Prepare raw OSD disk on ALL nodes ==========
+- name: Check if Ceph cluster is already initialized
+  ansible.builtin.stat:
+    path: /etc/ceph/ceph.conf
+  register: ceph_conf_check
+
+- name: Remove device-mapper locks and clean LVM/GPT signatures from OSD disk
+  ansible.builtin.shell: |
+    dmsetup remove_all -f || true
+    for vg in $(pvs --noheadings -o vg_name {{ ceph_osd_disk }} 2>/dev/null); do
+      vgremove -ff -y $vg || true
+    done
+    pvremove -ff -y {{ ceph_osd_disk }} || true
+    wipefs -a -f {{ ceph_osd_disk }} || true
+    dd if=/dev/zero of={{ ceph_osd_disk }} bs=1M count=100 status=none || true
+    DISK_SIZE_SECTORS=$(blockdev --getsz {{ ceph_osd_disk }} 2>/dev/null || echo 0)
+    if [ "$DISK_SIZE_SECTORS" -gt 2000 ]; then
+      SEEK_POS=$(( (DISK_SIZE_SECTORS / 2048) - 50 ))
+      dd if=/dev/zero of={{ ceph_osd_disk }} bs=1M seek=$SEEK_POS count=50 status=none || true
+    fi
+    sgdisk --zap-all {{ ceph_osd_disk }} || true
+    partprobe {{ ceph_osd_disk }} || true
+  when:
+    - ceph_osd_disk is defined
+    - not ceph_conf_check.stat.exists
+  failed_when: false
 
 # ========== STEP 2: Enable and start Docker on ALL nodes ==========
 - name: Start and enable docker
@@ -57,14 +130,23 @@
   ansible.builtin.apt:
     name: ceph-common
     state: present
-    update_cache: yes
+  register: apt_ceph_common
+  until: apt_ceph_common is succeeded
+  retries: 5
+  delay: 5
 
 # ========== STEP 6: Bootstrap Ceph cluster on FIRST NODE ONLY ==========
 - name: Bootstrap Ceph cluster
-  ansible.builtin.command: "cephadm bootstrap --mon-ip {{ ip | default(ansible_host) }} --cluster-network {{ ceph_public_network | default('10.0.0.0/8') }} --public-network {{ ceph_public_network | default('10.0.0.0/8') }} --skip-dashboard --skip-monitoring-stack"
+  ansible.builtin.command: "cephadm bootstrap --mon-ip {{ ip | default(ansible_host) }} --cluster-network {{ ceph_cluster_network | default('10.0.0.0/8') }} --skip-dashboard --skip-monitoring-stack"
   args:
     creates: /etc/ceph/ceph.conf
   when: inventory_hostname == groups['ceph_nodes'][0]
+
+- name: Ensure /etc/ceph directory exists on all nodes
+  ansible.builtin.file:
+    path: /etc/ceph
+    state: directory
+    mode: '0755'
 
 # ========== STEP 7: Copy /etc/ceph/ceph.conf from first node to other nodes ==========
 - name: Slurp ceph.conf from first node
@@ -84,6 +166,7 @@
     mode: '0644'
   when:
     - inventory_hostname != groups['ceph_nodes'][0]
+    - hostvars[groups['ceph_nodes'][0]]['slurp_ceph_conf'] is defined
     - hostvars[groups['ceph_nodes'][0]]['slurp_ceph_conf']['content'] is defined
 
 # ========== STEP 8: Copy /etc/ceph/ceph.client.admin.keyring from first node to other nodes ==========
@@ -104,6 +187,7 @@
     mode: '0600'
   when:
     - inventory_hostname != groups['ceph_nodes'][0]
+    - hostvars[groups['ceph_nodes'][0]]['slurp_ceph_keyring'] is defined
     - hostvars[groups['ceph_nodes'][0]]['slurp_ceph_keyring']['content'] is defined
 
 # ========== STEP 9: Get Ceph SSH public key from first node and add to authorized_keys on other nodes ==========
@@ -123,6 +207,7 @@
   when: 
     - inventory_hostname != groups['ceph_nodes'][0]
     - hostvars[groups['ceph_nodes'][0]]['slurp_ceph_pubkey'] is defined
+    - hostvars[groups['ceph_nodes'][0]]['slurp_ceph_pubkey']['content'] is defined
 
 # ========== STEP 10: Add remaining hosts to Ceph cluster - FIRST NODE ONLY ==========
 - name: Check existing hosts in ceph orch
@@ -136,7 +221,8 @@
   loop: "{{ groups['ceph_nodes'][1:] }}"
   when: 
     - inventory_hostname == groups['ceph_nodes'][0]
-    - item not in (ceph_orch_host_ls.stdout | default('[]') | from_json | map(attribute='hostname') | list)
+    - item not in (ceph_orch_host_ls.stdout | default('[]') | from_json | map(attribute='hostname', default='') | list)
+    - item not in (ceph_orch_host_ls.stdout | default('[]') | from_json | map(attribute='name', default='') | list)
 
 # ========== STEP 11: Wait for hosts to appear in ceph orch ==========
 - name: Wait for hosts to appear in ceph orch
@@ -147,20 +233,40 @@
   delay: 10
   when: inventory_hostname == groups['ceph_nodes'][0]
 
+- name: Patch internal cephadm AppArmor parsing bug in /var/lib/ceph on all storage nodes
+  ansible.builtin.shell: |
+    find /var/lib/ceph /usr/sbin -name 'cephadm*' -exec sed -i 's/item, mode = line\.split(\x27 \x27)/parts = line.strip().split(); item, mode = parts[0], parts[-1]/g' {} + || true
+  when: 
+    - inventory_hostname in groups['ceph_nodes']
+    - ansible_distribution_release == 'noble'
+  failed_when: false
+
 # ========== STEP 12: Add OSD disks - FIRST NODE ONLY ==========
-- name: Get available devices
-  ansible.builtin.command: ceph orch device ls -f json
-  register: ceph_orch_devices
+- name: Check existing OSD count
+  ansible.builtin.command: ceph osd ls -f json
+  register: ceph_osd_ls
   changed_when: false
   when: inventory_hostname == groups['ceph_nodes'][0]
 
-- name: Add OSD disk for each node if available
-  ansible.builtin.command: "ceph orch daemon add osd {{ item.hostname }}:{{ ceph_osd_disk }}"
-  loop: "{{ (ceph_orch_devices.stdout | default('[]') | from_json) }}"
+- name: Add OSD disk for each storage node if no OSDs exist
+  ansible.builtin.command: "ceph orch daemon add osd {{ item }}:{{ ceph_osd_disk }}"
+  loop: "{{ groups['ceph_nodes'] }}"
   when: 
     - inventory_hostname == groups['ceph_nodes'][0]
-    - item.devices is defined
-    - (item.devices | selectattr('path', 'equalto', ceph_osd_disk) | selectattr('available', 'equalto', true) | list | length) > 0
+    - ceph_osd_disk is defined
+    - (ceph_osd_ls.stdout | default('[]') | from_json | length) == 0
+  failed_when: false
+
+- name: Wait for all Ceph OSD daemons to be online and UP
+  ansible.builtin.command: ceph osd stat -f json
+  register: ceph_osd_stat
+  until: 
+    - ceph_osd_stat.stdout is defined
+    - (ceph_osd_stat.stdout | from_json).num_osds >= (groups['ceph_nodes'] | length)
+    - (ceph_osd_stat.stdout | from_json).num_up_osds >= (groups['ceph_nodes'] | length)
+  retries: 30
+  delay: 10
+  when: inventory_hostname == groups['ceph_nodes'][0]
 
 # ========== STEP 13: Create CephFS pools - FIRST NODE ONLY ==========
 - name: Check existing pools

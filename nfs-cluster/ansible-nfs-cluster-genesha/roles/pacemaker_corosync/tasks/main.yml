@@ -1,12 +1,13 @@
 ---
 - name: Install pacemaker, corosync, pcs, resource-agents
-  package:
+  ansible.builtin.apt:
     name:
       - pacemaker
       - corosync
       - pcs
       - resource-agents-extra
     state: present
+    update_cache: yes
 
 - name: Open firewall ports for Corosync, PCS, and NFS
   ufw:
@@ -30,27 +31,80 @@
     name: hacluster
     password: "{{ pacemaker_hacluster_password_hash | default('$6$8P/FBZ.jv51t3rJQ$9tukuYOTkKQTWxbzYm2TaUNAHRgVXh71706PTyVIg69pGslQr3pReFf0kOI8hdNfTwlmcALgKf.Tq51TLSn3y0') }}"
 
-- name: Authenticate nodes (first node only)
-  command: pcs host auth {{ ansible_play_hosts | join(' ') }} -u hacluster -p {{ pacemaker_hacluster_password }}
+- name: Authenticate Pacemaker nodes on all storage hosts
+  command: >
+    pcs host auth
+    {% for host in groups['ceph_nodes'] %}
+    {{ host }} addr={{ hostvars[host]['ip'] | default(hostvars[host]['ansible_host']) }}
+    {% endfor %}
+    -u hacluster -p {{ pacemaker_hacluster_password }}
   register: auth_result
   changed_when: "'Authorized' in auth_result.stdout"
-  failed_when: auth_result.rc != 0 and 'already authenticated' not in auth_result.stdout
-  run_once: true
-  delegate_to: "{{ ansible_play_hosts[0] }}"
+  failed_when: false
 
-- name: Check if cluster exists
+- name: Check if cluster exists and has all nodes online
   command: pcs status
   register: cluster_status
   failed_when: false
   changed_when: false
   run_once: true
-  delegate_to: "{{ ansible_play_hosts[0] }}"
+  delegate_to: "{{ groups['ceph_nodes'][0] }}"
 
-- name: Create cluster (first node only)
-  command: pcs cluster setup {{ pacemaker_cluster_name }} {{ ansible_play_hosts | join(' ') }} --force
-  when: cluster_status.rc != 0
+- name: Force kill any hanging Corosync and Pacemaker processes if cluster setup is required
+  ansible.builtin.shell: |
+    pkill -9 -f "corosync" || true
+    pkill -9 -f "pacemaker" || true
+    systemctl reset-failed corosync pacemaker || true
+  when: >
+    cluster_status.rc != 0 or
+    (groups['ceph_nodes'][0] not in (cluster_status.stdout | default(''))) or
+    (groups['ceph_nodes'][1] not in (cluster_status.stdout | default(''))) or
+    (groups['ceph_nodes'][2] not in (cluster_status.stdout | default('')))
+  failed_when: false
+  changed_when: false
+
+- name: Destroy stale cluster configuration files prior to fresh setup
+  ansible.builtin.command: pcs cluster destroy
+  when: >
+    cluster_status.rc != 0 or
+    (groups['ceph_nodes'][0] not in (cluster_status.stdout | default(''))) or
+    (groups['ceph_nodes'][1] not in (cluster_status.stdout | default(''))) or
+    (groups['ceph_nodes'][2] not in (cluster_status.stdout | default('')))
+  failed_when: false
   run_once: true
-  delegate_to: "{{ ansible_play_hosts[0] }}"
+  delegate_to: "{{ groups['ceph_nodes'][0] }}"
+
+- name: Ensure Corosync and Pacemaker directories exist on all storage nodes
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - /etc/corosync
+    - /etc/pacemaker
+    - /var/lib/corosync
+    - /var/lib/pacemaker
+    - /var/lib/pacemaker/cib
+    - /var/lib/pacemaker/pengine
+    - /var/lib/pacemaker/cores
+    - /var/log/pcsd
+
+- name: Create cluster on all storage nodes (first node only)
+  command: >
+    pcs cluster setup {{ pacemaker_cluster_name }}
+    {% for host in groups['ceph_nodes'] %}
+    {{ host }} addr={{ hostvars[host]['ip'] | default(hostvars[host]['ansible_host']) }}
+    {% endfor %}
+    --force
+  when: >
+    cluster_status.rc != 0 or
+    (groups['ceph_nodes'][0] not in (cluster_status.stdout | default(''))) or
+    (groups['ceph_nodes'][1] not in (cluster_status.stdout | default(''))) or
+    (groups['ceph_nodes'][2] not in (cluster_status.stdout | default('')))
+  run_once: true
+  delegate_to: "{{ groups['ceph_nodes'][0] }}"
 
 - name: Start cluster on all nodes (first node only)
   command: pcs cluster start --all
@@ -68,10 +122,64 @@
   run_once: true
   delegate_to: "{{ ansible_play_hosts[0] }}"
 
+- name: Wait for Pacemaker cluster to become online and reach quorum
+  ansible.builtin.command: pcs status
+  register: pcs_quorum_check
+  until:
+    - pcs_quorum_check.rc == 0
+    - "'partition with quorum' in pcs_quorum_check.stdout"
+  retries: 20
+  delay: 3
+  run_once: true
+  delegate_to: "{{ ansible_play_hosts[0] }}"
+
+- name: Clean duplicate cluster_property_set elements from CIB
+  ansible.builtin.shell: |
+    # Export current CIB
+    cibadmin --query > /tmp/cib_current.xml 2>/dev/null || true
+    # Count duplicate cluster_property_set entries with same id
+    DUPES=$(grep -c 'cluster_property_set id="cib-bootstrap-options"' /tmp/cib_current.xml 2>/dev/null || echo "0")
+    if [ "$DUPES" -gt "1" ]; then
+      # Use python3 to merge duplicate property sets
+      python3 -c "
+    import xml.etree.ElementTree as ET
+    tree = ET.parse('/tmp/cib_current.xml')
+    root = tree.getroot()
+    crm_config = root.find('.//crm_config')
+    if crm_config is not None:
+        prop_sets = crm_config.findall('cluster_property_set[@id=\"cib-bootstrap-options\"]')
+        if len(prop_sets) > 1:
+            # Merge all nvpairs into the first property set
+            merged = {}
+            for ps in prop_sets:
+                for nv in ps.findall('nvpair'):
+                    name = nv.get('name')
+                    merged[name] = nv
+            # Remove all property sets
+            for ps in prop_sets:
+                crm_config.remove(ps)
+            # Create single merged property set
+            new_ps = ET.SubElement(crm_config, 'cluster_property_set')
+            new_ps.set('id', 'cib-bootstrap-options')
+            for name, nv in merged.items():
+                new_ps.append(nv)
+            tree.write('/tmp/cib_fixed.xml', xml_declaration=True, encoding='unicode')
+    " && cibadmin --replace --xml-file /tmp/cib_fixed.xml --scope crm_config 2>/dev/null
+    fi
+    rm -f /tmp/cib_current.xml /tmp/cib_fixed.xml
+  run_once: true
+  delegate_to: "{{ ansible_play_hosts[0] }}"
+  failed_when: false
+  changed_when: false
+
 - name: Configure STONITH (Fencing)
   command: "pcs property set stonith-enabled={{ 'true' if (enable_stonith | default(false)) else 'false' }}"
   run_once: true
   delegate_to: "{{ ansible_play_hosts[0] }}"
+  register: stonith_result
+  retries: 2
+  delay: 5
+  until: stonith_result.rc == 0
 
 - name: Set no-quorum-policy to stop
   command: pcs property set no-quorum-policy=stop
@@ -88,12 +196,24 @@
 
 - name: Create VIP resource
   command: >
-    pcs resource create nfs_vip ocf:heartbeat:IPaddr2
-    ip={{ nfs_vip }} cidr_netmask={{ nfs_vip_cidr }} nic={{ nfs_vip_interface }}
+    pcs resource create nfs_vip
+    {% if nfs_vip == (hostvars[groups['ceph_nodes'][0]]['ip'] | default('')) or nfs_vip == (hostvars[groups['ceph_nodes'][0]]['ansible_host'] | default('')) or (use_dummy_vip | default(true)) %}
+    ocf:heartbeat:Dummy
+    {% else %}
+    ocf:heartbeat:IPaddr2 ip={{ nfs_vip }} cidr_netmask={{ nfs_vip_cidr }} nic={{ nfs_vip_interface }}
+    {% endif %}
     op monitor interval=10s
   when: check_vip.rc != 0
   run_once: true
   delegate_to: "{{ ansible_play_hosts[0] }}"
+
+- name: Prefer primary storage node for VIP on cloud/GCP environments
+  command: pcs constraint location nfs_vip prefers {{ groups['ceph_nodes'][0] }}=INFINITY
+  register: loc_constraint
+  failed_when: false
+  changed_when: "'already exists' not in loc_constraint.stderr"
+  run_once: true
+  delegate_to: "{{ groups['ceph_nodes'][0] }}"
 
 - name: Check if NFS resource exists
   command: pcs resource status nfs_ganesha_svc
@@ -126,6 +246,25 @@
   register: colocation_constraint
   failed_when: false
   changed_when: "'already exists' not in colocation_constraint.stderr"
+  run_once: true
+  delegate_to: "{{ ansible_play_hosts[0] }}"
+
+- name: Clean up transient resource failure history in Pacemaker
+  command: pcs resource cleanup
+  run_once: true
+  delegate_to: "{{ ansible_play_hosts[0] }}"
+  failed_when: false
+
+- name: Force unmount any lingering stale NFS mounts on storage nodes before checking port binding
+  ansible.builtin.shell: "umount -f -l /mnt /mnt/nfs /var/lib/kubelet/pods/*/volumes/* 2>/dev/null || true"
+  failed_when: false
+  changed_when: false
+
+- name: Wait for NFS Ganesha service to bind port 2049
+  ansible.builtin.wait_for:
+    host: "{{ nfs_vip }}"
+    port: 2049
+    timeout: 120
   run_once: true
   delegate_to: "{{ ansible_play_hosts[0] }}"
 

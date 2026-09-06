@@ -1,6 +1,13 @@
 NFS_Core_Param {
     NFS_Port = 2049;
     Protocols = 3,4;
+    Enable_NLM = false;
+    Enable_RQUOTA = false;
+    Grace_Period = 10;
+}
+
+NFS_KRB5 {
+    Active_krb5 = false;
 }
 
 EXPORT {

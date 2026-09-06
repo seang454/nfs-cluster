@@ -1,6 +1,9 @@
 ---
 # handlers file for nfs_ganesha
 - name: restart nfs-ganesha
-  systemd:
-    name: nfs-ganesha
-    state: restarted
+  ansible.builtin.shell: |
+    pcs resource cleanup nfs_ganesha_svc || true
+    pkill -9 ganesha.nfsd || true
+    systemctl reset-failed nfs-ganesha || true
+  changed_when: false
+  failed_when: false

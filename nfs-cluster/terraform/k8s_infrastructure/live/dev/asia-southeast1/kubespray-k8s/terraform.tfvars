@@ -77,6 +77,16 @@ random_resource_type = [
 # Desired VM power state: "RUNNING" to keep VMs powered on, "TERMINATED" to stop VMs.
 desired_status = "RUNNING"
 
+# ---------------------------------------------------------------------------
+# Selective node deletion
+# ---------------------------------------------------------------------------
+# List specific GCP instance names to exclude (destroy) from the cluster.
+# The node counts above define the full pool of names; this list filters out
+# which ones actually get created. Remaining nodes keep their names/IPs/zones.
+#
+# Example: exclude_nodes = ["k8s-master02", "k8s-worker01", "k8s-haproxy-1", "k8s-haproxy-2"]
+exclude_nodes = []
+
 image                           = "ubuntu-os-cloud/ubuntu-2404-lts-amd64"
 control_plane_boot_disk_size_gb = 20
 worker_boot_disk_size_gb        = 20

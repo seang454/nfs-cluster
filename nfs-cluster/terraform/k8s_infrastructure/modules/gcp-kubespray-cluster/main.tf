@@ -112,6 +112,45 @@ locals {
   control_plane_nodes_by_name = { for node in local.control_plane_nodes : node.name => node }
 
   ssh_public_key = trimspace(var.ssh_public_key) != "" ? trimspace(var.ssh_public_key) : trimspace(file(pathexpand(var.ssh_public_key_path)))
+
+  # -------------------------------------------------------------------------
+  # Filtered node sets — exclude specific nodes by GCP instance name
+  # -------------------------------------------------------------------------
+  active_nodes = [
+    for node in local.nodes :
+    node
+    if !contains(var.exclude_nodes, node.instance_name)
+  ]
+
+  active_nodes_by_name = {
+    for name, node in local.nodes_by_name :
+    name => node
+    if !contains(var.exclude_nodes, node.instance_name)
+  }
+
+  active_nfs_nodes_by_name = {
+    for name, node in local.nfs_nodes_by_name :
+    name => node
+    if !contains(var.exclude_nodes, node.instance_name)
+  }
+
+  active_control_plane_nodes = [
+    for node in local.control_plane_nodes :
+    node
+    if !contains(var.exclude_nodes, node.instance_name)
+  ]
+
+  active_worker_nodes = [
+    for node in local.worker_nodes :
+    node
+    if !contains(var.exclude_nodes, node.instance_name)
+  ]
+
+  active_nfs_nodes = [
+    for node in local.nfs_nodes :
+    node
+    if !contains(var.exclude_nodes, node.instance_name)
+  ]
 }
 
 resource "terraform_data" "preflight" {
@@ -134,12 +173,17 @@ resource "terraform_data" "preflight" {
       condition     = length(local.usable_fallback_machines) > 0 || length(var.blocked_machine_types) == 0
       error_message = "All fallback machine types are blocked. Remove entries from blocked_machine_types or add candidates to fallback_machine_types."
     }
+
+    precondition {
+      condition     = alltrue([for name in var.exclude_nodes : contains([for n in local.nodes : n.instance_name], name)])
+      error_message = "exclude_nodes contains invalid instance name(s). Valid names are: ${join(", ", [for n in local.nodes : n.instance_name])}"
+    }
   }
 }
 
 # Create secondary data disk for Ceph OSD on NFS nodes (/dev/sdb)
 resource "google_compute_disk" "ceph_osd" {
-  for_each = local.nfs_nodes_by_name
+  for_each = local.active_nfs_nodes_by_name
 
   name = "${each.value.instance_name}-ceph-osd"
   type = var.boot_disk_type
@@ -156,7 +200,7 @@ resource "google_compute_disk" "ceph_osd" {
 }
 
 resource "google_compute_address" "this" {
-  for_each = local.nodes_by_name
+  for_each = local.active_nodes_by_name
 
   name   = "${each.value.instance_name}-ip"
   region = each.value.region
@@ -165,7 +209,7 @@ resource "google_compute_address" "this" {
 }
 
 resource "google_compute_instance" "this" {
-  for_each = local.nodes_by_name
+  for_each = local.active_nodes_by_name
 
   name                      = each.value.instance_name
   machine_type              = each.value.machine_type

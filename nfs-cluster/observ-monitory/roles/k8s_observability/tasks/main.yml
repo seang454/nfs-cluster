@@ -129,6 +129,15 @@
       - /tmp/prometheus-values.yaml
     state: present
 
+- name: Delete old Loki StatefulSet to allow storage schema update to Loki 3.0
+  kubernetes.core.k8s:
+    kubeconfig: /etc/kubernetes/admin.conf
+    name: loki
+    namespace: "{{ k8s_monitoring_namespace }}"
+    kind: StatefulSet
+    state: absent
+  ignore_errors: true
+
 - name: Deploy Loki Stack via Helm
   kubernetes.core.helm:
     kubeconfig: /etc/kubernetes/admin.conf
@@ -137,7 +146,6 @@
     release_namespace: "{{ k8s_monitoring_namespace }}"
     values_files:
       - /tmp/loki-values.yaml
-    force: true
     state: present
 
 - name: Render and Apply Ceph Cluster Grafana Dashboard ConfigMap

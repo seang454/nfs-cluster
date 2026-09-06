@@ -4,7 +4,7 @@
 # ==========================================
 - name: Common setup (hosts file, time sync, prerequisites)
   hosts: all
-  become: yes
+  become: true
   roles:
     - common
 
@@ -13,7 +13,7 @@
 # ==========================================
 - name: Deploy HA Ceph Storage Cluster
   hosts: ceph_nodes
-  become: yes
+  become: true
   roles:
     - ceph
 
@@ -22,7 +22,7 @@
 # ==========================================
 - name: Deploy NFS-Ganesha Gateways
   hosts: ceph_nodes
-  become: yes
+  become: true
   roles:
     - nfs_ganesha
 
@@ -31,7 +31,7 @@
 # ==========================================
 - name: Configure Pacemaker and Corosync for HA
   hosts: ceph_nodes
-  become: yes
+  become: true
   roles:
     - pacemaker_corosync
 
@@ -40,6 +40,17 @@
 # ==========================================
 - name: Configure NFS Clients on Kubernetes nodes
   hosts: nfs_clients
-  become: yes
+  become: true
   roles:
     - nfs_client
+
+# ==========================================
+# PLAY 6: Automated Post-Installation Health Verification
+# ==========================================
+- name: Verify Full System Health & Installation Status
+  hosts: all
+  become: true
+  vars:
+    verify_mode: "install"
+  roles:
+    - verify

@@ -250,13 +250,21 @@ We have created a structured Ansible project with dedicated roles for each techn
 
 ### 3. Orchestration
 
-#### site.yml (Main Playbook)
+#### site.yml (Main Deployment Playbook)
 Executes all roles in the correct order:
 1. `common` → ALL nodes
 2. `ceph` → ceph_nodes (haproxy-1/2/3)
 3. `nfs_ganesha` → ceph_nodes
 4. `pacemaker_corosync` → ceph_nodes
 5. `nfs_client` → nfs_clients (master-1/2/3, worker-1/2)
+
+#### uninstall.yml (Teardown & Uninstall Playbook)
+Executes teardown tasks in reverse order for clean removal:
+1. `nfs_client` → Unmount NFS shares, delete Kubernetes provisioner, remove nfs-common
+2. `pacemaker_corosync` → Stop & delete Pacemaker resources, destroy cluster, purge packages & configs
+3. `nfs_ganesha` → Stop NFS-Ganesha, delete Ceph ganesha user/keyring, purge configs & packages
+4. `ceph` → Purge Ceph daemons via cephadm, stop containers, wipe OSD raw disk headers (`wipefs`/`dd`), delete `/etc/ceph` & `/var/lib/ceph`
+5. `common` → Clean up hosts entries and chrony package
 
 ### 4. Centralized Variables
 
@@ -274,7 +282,9 @@ All configuration is centralized in one file with risk markers:
 ```text
 nfs-cluster-genesha/
 ├── ansible.cfg
-├── site.yml                              ← Main playbook (5 plays in order)
+├── site.yml                              ← Main deployment playbook (with auto post-install verification)
+├── uninstall.yml                         ← Main teardown playbook (with auto post-teardown verification)
+├── verify.yml                            ← Standalone verification playbook (Install or Uninstall health checks)
 ├── group_vars/
 │   └── all.yml                           ← ALL variables in ONE place (with risk markers)
 ├── inventory/
@@ -283,21 +293,31 @@ nfs-cluster-genesha/
     ├── common/                           ← Runs FIRST on ALL nodes
     │   ├── defaults/main.yml
     │   ├── templates/hosts.j2            ← /etc/hosts template
-    │   └── tasks/main.yml                ← hosts, chrony, firewall, prerequisites
+    │   ├── tasks/main.yml                ← hosts, chrony, firewall, prerequisites
+    │   └── tasks/uninstall.yml           ← common teardown tasks
     ├── ceph/                             ← 17-step Ceph deployment
     │   ├── defaults/main.yml
-    │   └── tasks/main.yml                ← bootstrap, keys, OSD, CephFS, health check
+    │   ├── tasks/main.yml                ← bootstrap, keys, OSD, CephFS, health check
+    │   └── tasks/uninstall.yml           ← purge cephadm daemons, wipe OSD disks, clean configs
     ├── nfs_ganesha/                      ← NFS-Ganesha with dedicated Ceph user
     │   ├── defaults/main.yml
     │   ├── templates/ganesha.conf.j2     ← Dynamic NFS export config
     │   ├── handlers/main.yml             ← Auto-restart on config change
-    │   └── tasks/main.yml                ← install, auth, config, disable systemd
+    │   ├── tasks/main.yml                ← install, auth, config, disable systemd
+    │   └── tasks/uninstall.yml           ← stop ganesha, remove auth user & keyrings
     ├── pacemaker_corosync/               ← HA cluster with VIP + NFS resource
     │   ├── defaults/main.yml
-    │   └── tasks/main.yml                ← auth, cluster, VIP, NFS, ordering, colocation
-    └── nfs_client/                       ← NFS client with pre-check
-        ├── defaults/main.yml
-        └── tasks/main.yml                ← install, wait_for VIP, mount, verify
+    │   ├── tasks/main.yml                ← auth, cluster, VIP, NFS, ordering, colocation
+    │   └── tasks/uninstall.yml           ← stop/delete resources, destroy cluster, remove packages
+    ├── nfs_client/                       ← NFS client with pre-check
+    │   ├── defaults/main.yml
+    │   ├── tasks/main.yml                ← install, wait_for VIP, mount, verify
+    │   └── tasks/uninstall.yml           ← delete k8s provisioner, unmount share, clean fstab
+    └── verify/                           ← Dual-mode Verification Role
+        └── tasks/
+            ├── main.yml                  ← Mode router (install vs uninstall)
+            ├── verify_install.yml        ← Post-install health, write test & k8s provisioner check
+            └── verify_uninstall.yml      ← Post-teardown cleanliness & zero-residual check
 ```
 
 ---

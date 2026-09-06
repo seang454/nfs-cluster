@@ -33,6 +33,24 @@
         state: absent
       failed_when: false
 
+    - name: Remove leftover etcd endpoints in kube-system if present
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
+        name: prometheus-kube-prometheus-kube-etcd
+        namespace: kube-system
+        kind: Endpoints
+        state: absent
+      failed_when: false
+
+    - name: Remove leftover etcd service in kube-system if present
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
+        name: prometheus-kube-prometheus-kube-etcd
+        namespace: kube-system
+        kind: Service
+        state: absent
+      failed_when: false
+
 - name: Phase 2 - Remove Exporters and Grafana Alloy from Storage Nodes
   hosts: ceph_nodes
   become: true

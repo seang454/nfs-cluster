@@ -1,0 +1,95 @@
+---
+# tasks file for uninstalling ceph role completely
+
+- name: Get Ceph FSID if /etc/ceph/ceph.conf exists
+  ansible.builtin.shell: "grep -E '^fsid' /etc/ceph/ceph.conf | awk '{print $3}'"
+  register: ceph_fsid_check
+  failed_when: false
+  changed_when: false
+
+- name: Purge Ceph cluster using cephadm if FSID found
+  ansible.builtin.command: "cephadm rm-cluster --fsid {{ ceph_fsid_check.stdout }} --force --zap-ls-daemons"
+  when:
+    - ceph_fsid_check.stdout is defined
+    - ceph_fsid_check.stdout | length > 0
+  failed_when: false
+
+- name: Stop and disable all ceph systemd units
+  ansible.builtin.shell: |
+    systemctl stop 'ceph*' || true
+    systemctl disable 'ceph*' || true
+    rm -f /etc/systemd/system/ceph*
+    rm -f /etc/systemd/system/multi-user.target.wants/ceph*
+    systemctl daemon-reload
+    systemctl reset-failed || true
+  failed_when: false
+
+- name: Stop and remove any remaining Ceph containers
+  ansible.builtin.shell: "docker ps -a --filter name=ceph -q | xargs -r docker rm -f"
+  failed_when: false
+
+- name: Remove Ceph SSH public key from authorized_keys on nodes
+  ansible.builtin.shell: "sed -i '/ceph/d' /root/.ssh/authorized_keys"
+  failed_when: false
+
+- name: Remove device-mapper locks and clean LVM/Physical Volumes on OSD disk
+  ansible.builtin.shell: |
+    dmsetup remove_all -f || true
+    for vg in $(pvs --noheadings -o vg_name {{ ceph_osd_disk }} 2>/dev/null); do
+      vgremove -ff -y $vg || true
+    done
+    pvremove -ff -y {{ ceph_osd_disk }} || true
+  when: ceph_osd_disk is defined
+  failed_when: false
+
+- name: Zap OSD disk (wipefs, zero header & partition table)
+  block:
+    - name: Wipe filesystem signatures from OSD disk
+      ansible.builtin.command: "wipefs -a -f {{ ceph_osd_disk }}"
+      failed_when: false
+
+    - name: Zero out disk header and footer of OSD disk
+      ansible.builtin.shell: |
+        dd if=/dev/zero of={{ ceph_osd_disk }} bs=1M count=100 status=none || true
+        DISK_SIZE_SECTORS=$(blockdev --getsz {{ ceph_osd_disk }} 2>/dev/null || echo 0)
+        if [ "$DISK_SIZE_SECTORS" -gt 2000 ]; then
+          SEEK_POS=$(( (DISK_SIZE_SECTORS / 2048) - 50 ))
+          dd if=/dev/zero of={{ ceph_osd_disk }} bs=1M seek=$SEEK_POS count=50 status=none || true
+        fi
+      failed_when: false
+
+    - name: Zap partition table with sgdisk if available
+      ansible.builtin.command: "sgdisk --zap-all {{ ceph_osd_disk }}"
+      failed_when: false
+
+    - name: Re-read partition table
+      ansible.builtin.command: "partprobe {{ ceph_osd_disk }}"
+      failed_when: false
+  when: ceph_osd_disk is defined
+
+- name: Remove Ceph configuration, binary, data, and log directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/ceph
+    - /var/lib/ceph
+    - /var/log/ceph
+    - /var/run/ceph
+    - /usr/sbin/cephadm
+    - /etc/apt/sources.list.d/ceph.list
+
+- name: Stop and disable docker service
+  ansible.builtin.service:
+    name: docker
+    state: stopped
+    enabled: no
+  failed_when: false
+
+- name: Uninstall ceph-common package
+  ansible.builtin.apt:
+    name: ceph-common
+    state: absent
+    purge: true
+  failed_when: false
+

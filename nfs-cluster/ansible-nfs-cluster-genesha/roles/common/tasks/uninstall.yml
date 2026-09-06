@@ -1,0 +1,27 @@
+---
+# tasks file for uninstalling common role changes completely
+
+- name: Restore default /etc/hosts file
+  ansible.builtin.copy:
+    content: |
+      127.0.0.1   localhost
+      ::1         localhost ip6-localhost ip6-loopback
+    dest: /etc/hosts
+    owner: root
+    group: root
+    mode: '0644'
+  failed_when: false
+
+- name: Stop and disable chrony if installed
+  ansible.builtin.systemd:
+    name: chronyd
+    state: stopped
+    enabled: no
+  failed_when: false
+
+- name: Uninstall chrony package
+  ansible.builtin.apt:
+    name: chrony
+    state: absent
+    purge: true
+  failed_when: false

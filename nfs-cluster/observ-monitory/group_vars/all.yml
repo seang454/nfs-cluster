@@ -28,9 +28,64 @@ ha_cluster_exporter_port: 9664
 loki_push_port: 3100
 grafana_web_port: 3000
 
-# Kubernetes Storage Settings (Using Cluster's nfs-client provisioner)
+# ==========================================
+# KUBERNETES STORAGE CONFIGURATION
+# Set `enabled: true` for the storage option you want to use.
+# (Set `enabled: false` on all other storage options)
+# ==========================================
 k8s_monitoring_namespace: "monitoring"
-k8s_decoupled_storage_class: "nfs-client"
-prometheus_storage_size: "10Gi"    # Reduced for fast testing (Production: 50Gi+)
-loki_storage_size: "10Gi"          # Reduced for fast testing (Production: 50Gi+)
-prometheus_retention: "24h"        # Short 24h retention for dev/test
+
+# ------------------------------------------
+# Prometheus Storage Configuration
+# ------------------------------------------
+prometheus_storage:
+  # Option 1: StorageClass / Dynamic PVC (nfs-client, longhorn, local-path, standard, etc.)
+  storage_class:
+    enabled: true
+    name: "nfs-client"
+    size: "10Gi"
+
+  # Option 2: HostPath (Direct directory mount on node disk)
+  host_path:
+    enabled: false
+    path: "/var/lib/prometheus-data"
+
+  # Option 3: EmptyDir (Ephemeral node disk storage)
+  empty_dir:
+    enabled: false
+
+  # Option 4: EmptyDir Memory (Ephemeral RAM-backed storage)
+  empty_dir_memory:
+    enabled: false
+
+  # Metric Retention Period
+  retention: "24h"
+
+# ------------------------------------------
+# Loki Storage Configuration
+# ------------------------------------------
+loki_storage:
+  # Option 1: StorageClass / Dynamic PVC (nfs-client, longhorn, local-path, standard, etc.)
+  storage_class:
+    enabled: true
+    name: "nfs-client"
+    size: "10Gi"
+
+  # Option 2: HostPath (Direct directory mount on node disk)
+  host_path:
+    enabled: false
+    path: "/var/lib/loki-data"
+
+  # Option 3: EmptyDir (Ephemeral node disk storage)
+  empty_dir:
+    enabled: false
+
+  # Option 4: EmptyDir Memory (Ephemeral RAM-backed storage)
+  empty_dir_memory:
+    enabled: false
+
+# Legacy fallback compatibility
+k8s_decoupled_storage_class: "{{ prometheus_storage.storage_class.name | default('nfs-client') }}"
+prometheus_storage_size: "{{ prometheus_storage.storage_class.size | default('10Gi') }}"
+loki_storage_size: "{{ loki_storage.storage_class.size | default('10Gi') }}"
+prometheus_retention: "{{ prometheus_storage.retention | default('24h') }}"

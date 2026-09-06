@@ -1,0 +1,14 @@
+---
+# ==========================================
+# MASTER VERIFICATION PLAYBOOK FOR HA CEPH + NFS-GANESHA
+# Verifies installation health or uninstallation cleanliness
+# Usage:
+#   ansible-playbook -i inventory/hosts.ini verify.yml                            # Verifies Installation
+#   ansible-playbook -i inventory/hosts.ini verify.yml -e "verify_mode=uninstall" # Verifies Teardown
+# ==========================================
+
+- name: Execute System Verification (Install or Uninstall)
+  hosts: all
+  become: yes
+  roles:
+    - verify

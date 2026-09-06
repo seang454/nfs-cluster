@@ -1,0 +1,53 @@
+---
+# tasks file for uninstalling nfs_client role completely
+
+- name: Delete Kubernetes NFS Provisioner deployment & resources by explicit resource name
+  ansible.builtin.shell: |
+    kubectl delete deployment nfs-client-provisioner -n kube-system --ignore-not-found=true --grace-period=0 --force
+    kubectl delete storageclass {{ k8s_storage_class_name | default('nfs-client') }} --ignore-not-found=true
+    kubectl delete serviceaccount nfs-client-provisioner -n kube-system --ignore-not-found=true
+    kubectl delete clusterrole nfs-client-provisioner-runner --ignore-not-found=true
+    kubectl delete clusterrolebinding run-nfs-client-provisioner --ignore-not-found=true
+    kubectl delete role leader-locking-nfs-client-provisioner -n kube-system --ignore-not-found=true
+    kubectl delete rolebinding leader-locking-nfs-client-provisioner -n kube-system --ignore-not-found=true
+  when:
+    - inventory_hostname == groups['nfs_clients'][0]
+  failed_when: false
+  changed_when: false
+
+- name: Delete Kubernetes NFS Provisioner manifest from file if present
+  ansible.builtin.command: kubectl delete -f /tmp/k8s-nfs-provisioner.yaml --ignore-not-found=true
+  when:
+    - inventory_hostname == groups['nfs_clients'][0]
+  failed_when: false
+  changed_when: false
+
+- name: Remove temporary Kubernetes NFS Provisioner manifest
+  ansible.builtin.file:
+    path: /tmp/k8s-nfs-provisioner.yaml
+    state: absent
+  when:
+    - inventory_hostname == groups['nfs_clients'][0]
+
+- name: Force unmount NFS mount point if active or hanging
+  ansible.builtin.command: "umount -f -l {{ nfs_mount_point }}"
+  failed_when: false
+
+- name: Remove NFS share from /etc/fstab
+  ansible.posix.mount:
+    path: "{{ nfs_mount_point }}"
+    state: absent
+  failed_when: false
+
+- name: Remove NFS mount point directory
+  ansible.builtin.file:
+    path: "{{ nfs_mount_point }}"
+    state: absent
+  failed_when: false
+
+- name: Uninstall nfs-common package
+  ansible.builtin.apt:
+    name: nfs-common
+    state: absent
+    purge: true
+  failed_when: false

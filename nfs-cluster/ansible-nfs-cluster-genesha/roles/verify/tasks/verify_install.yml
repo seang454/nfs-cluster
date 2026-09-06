@@ -1,0 +1,129 @@
+---
+# tasks file for verifying full HA Ceph + NFS-Ganesha installation health
+
+# ==========================================
+# PHASE 1: Verify Ceph Storage Cluster Health
+# ==========================================
+- name: Verify Ceph cluster status and health (first node only)
+  block:
+    - name: Get Ceph status JSON
+      ansible.builtin.command: ceph health -f json
+      register: ceph_health_check
+      changed_when: false
+
+    - name: Verify status is HEALTH_OK or HEALTH_WARN
+      ansible.builtin.assert:
+        that:
+          - (ceph_health_check.stdout | from_json).status in ['HEALTH_OK', 'HEALTH_WARN']
+        fail_msg: "Ceph cluster is NOT healthy! Status: {{ (ceph_health_check.stdout | from_json).status }}"
+        success_msg: "Ceph cluster health is {{ (ceph_health_check.stdout | from_json).status }} (OK)"
+
+    - name: Check CephFS filesystem existence
+      ansible.builtin.command: ceph fs ls -f json
+      register: ceph_fs_check
+      changed_when: false
+
+    - name: Verify CephFS filesystem '{{ ceph_fsname }}' exists
+      ansible.builtin.assert:
+        that:
+          - ceph_fsname in (ceph_fs_check.stdout | from_json | map(attribute='name') | list)
+        fail_msg: "CephFS filesystem {{ ceph_fsname }} was not found!"
+        success_msg: "CephFS filesystem {{ ceph_fsname }} is active"
+  when: inventory_hostname == groups['ceph_nodes'][0]
+
+# ==========================================
+# PHASE 2: Verify Pacemaker & Corosync HA Cluster
+# ==========================================
+- name: Verify Pacemaker HA cluster resources (first node only)
+  block:
+    - name: Get Pacemaker cluster status
+      ansible.builtin.command: pcs status xml
+      register: pcs_status_xml
+      changed_when: false
+
+    - name: Verify Virtual IP (nfs_vip) resource is running
+      ansible.builtin.command: pcs resource status nfs_vip
+      register: vip_status
+      changed_when: false
+      failed_when: "'Started' not in vip_status.stdout"
+
+    - name: Verify NFS-Ganesha (nfs_ganesha_svc) resource is running
+      ansible.builtin.command: pcs resource status nfs_ganesha_svc
+      register: ganesha_svc_status
+      changed_when: false
+      failed_when: "'Started' not in ganesha_svc_status.stdout"
+
+    - name: Test NFS VIP reachability on Port 2049
+      ansible.builtin.wait_for:
+        host: "{{ nfs_vip }}"
+        port: 2049
+        timeout: 30
+      register: vip_port_check
+  when: inventory_hostname == groups['ceph_nodes'][0]
+
+# ==========================================
+# PHASE 3: Verify NFS Client Mount & Read/Write Data Flow
+# ==========================================
+- name: Verify NFS Client mount and write capability
+  block:
+    - name: Check if NFS share is mounted on client nodes
+      ansible.builtin.command: "mountpoint -q {{ nfs_mount_point }}"
+      register: mount_check
+      changed_when: false
+      failed_when: mount_check.rc != 0
+
+    - name: Test write operations to NFS share (first client only)
+      ansible.builtin.shell: "echo 'NFS HA Cluster Verification Test - {{ ansible_date_time.iso8601 }}' > {{ nfs_mount_point }}/verification_test.txt"
+      when: inventory_hostname == (ansible_play_hosts | select('in', groups['nfs_clients']) | first)
+
+    - name: Read test file on client nodes
+      ansible.builtin.slurp:
+        src: "{{ nfs_mount_point }}/verification_test.txt"
+      register: slurp_test_file
+
+    - name: Verify test file content matches
+      ansible.builtin.assert:
+        that:
+          - "'NFS HA Cluster Verification Test' in (slurp_test_file.content | b64decode)"
+        fail_msg: "NFS write/read test failed on node {{ inventory_hostname }}!"
+        success_msg: "NFS write/read test PASSED on {{ inventory_hostname }}"
+
+    - name: Clean up verification test file (first client only)
+      ansible.builtin.file:
+        path: "{{ nfs_mount_point }}/verification_test.txt"
+        state: absent
+      when: inventory_hostname == (ansible_play_hosts | select('in', groups['nfs_clients']) | first)
+  when: inventory_hostname in groups['nfs_clients']
+
+# ==========================================
+# PHASE 4: Verify Kubernetes Storage Provisioner
+# ==========================================
+- name: Verify Kubernetes NFS Provisioner status (first client only)
+  block:
+    - name: Check nfs-client-provisioner Deployment status in k8s
+      ansible.builtin.command: kubectl get deployment nfs-client-provisioner -n kube-system -o jsonpath='{.status.readyReplicas}'
+      register: k8s_prov_check
+      changed_when: false
+      failed_when: k8s_prov_check.stdout != '1'
+
+    - name: Check StorageClass existence in k8s
+      ansible.builtin.command: "kubectl get storageclass {{ k8s_storage_class_name | default('nfs-client') }} -o jsonpath='{.metadata.name}'"
+      register: sc_check
+      changed_when: false
+      failed_when: sc_check.stdout != (k8s_storage_class_name | default('nfs-client'))
+  when: inventory_hostname == groups['nfs_clients'][0]
+
+# ==========================================
+# PHASE 5: Display Summary Report
+# ==========================================
+- name: Display Installation Verification Report
+  ansible.builtin.debug:
+    msg:
+      - "======================================================================="
+      - "🎉 INSTALLATION VERIFICATION COMPLETE: ALL COMPONENTS HEALTHY & WORKING!"
+      - "• Ceph Storage Cluster: HEALTHY (CephFS '{{ ceph_fsname }}' Active)"
+      - "• Pacemaker / Corosync HA: ACTIVE (VIP {{ nfs_vip }} & Ganesha Service Started)"
+      - "• NFS Share Mounting: MOUNTED & WRITE-VERIFIED across Client Nodes"
+      - "• Kubernetes Storage Provisioner: READY (StorageClass '{{ k8s_storage_class_name | default('nfs-client') }}' Active)"
+      - "======================================================================="
+  run_once: true

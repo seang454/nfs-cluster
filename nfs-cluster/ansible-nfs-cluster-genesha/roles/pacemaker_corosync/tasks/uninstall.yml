@@ -1,0 +1,79 @@
+---
+# tasks file for uninstalling pacemaker_corosync role completely
+
+- name: Disable and remove Pacemaker resources (first node only)
+  block:
+    - name: Disable nfs_ganesha_svc resource
+      ansible.builtin.command: pcs resource disable nfs_ganesha_svc
+      failed_when: false
+
+    - name: Disable nfs_vip resource
+      ansible.builtin.command: pcs resource disable nfs_vip
+      failed_when: false
+
+    - name: Delete nfs_ganesha_svc resource
+      ansible.builtin.command: pcs resource delete nfs_ganesha_svc --force
+      failed_when: false
+
+    - name: Delete nfs_vip resource
+      ansible.builtin.command: pcs resource delete nfs_vip --force
+      failed_when: false
+
+    - name: Stop cluster on all nodes
+      ansible.builtin.command: pcs cluster stop --all --force
+      failed_when: false
+
+    - name: Destroy Pacemaker cluster configuration
+      ansible.builtin.command: pcs cluster destroy --force
+      failed_when: false
+  when: inventory_hostname == groups['ceph_nodes'][0]
+
+- name: Ensure VIP interface alias is removed from network adapter
+  ansible.builtin.command: "ip addr del {{ nfs_vip }}/{{ nfs_vip_cidr | default('24') }} dev {{ nfs_vip_interface | default('ens4') }}"
+  when: >
+    nfs_vip != (hostvars[inventory_hostname]['ip'] | default('')) and
+    nfs_vip != (hostvars[inventory_hostname]['ansible_host'] | default(''))
+  failed_when: false
+
+- name: Stop and disable pcsd service
+  ansible.builtin.systemd:
+    name: pcsd
+    state: stopped
+    enabled: no
+  failed_when: false
+
+- name: Stop corosync and pacemaker services if running
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: no
+  loop:
+    - pacemaker
+    - corosync
+  failed_when: false
+
+- name: Uninstall Pacemaker, Corosync, and PCS packages
+  ansible.builtin.apt:
+    name:
+      - pacemaker
+      - corosync
+      - pcs
+      - resource-agents-extra
+      - resource-agents
+    state: absent
+    purge: true
+  failed_when: false
+
+- name: Remove Pacemaker and Corosync configuration files and directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/corosync
+    - /var/lib/corosync
+    - /var/lib/pacemaker
+    - /etc/pacemaker
+    - /var/log/pcsd
+    - /var/log/corosync
+    - /var/log/pacemaker
+  failed_when: false

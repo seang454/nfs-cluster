@@ -19,7 +19,7 @@
 nfs_dns_name: "nfs-server.internal"
 
 # 🔴 Private IP of primary NFS storage node (haproxy-1)
-nfs_vip: "10.146.0.11"
+nfs_vip: "10.146.0.15"
 
 # ⚠️  DO NOT CHANGE after Kubernetes PersistentVolumes reference this path.
 #    If you change this, every PV/PVC in your cluster will lose connection

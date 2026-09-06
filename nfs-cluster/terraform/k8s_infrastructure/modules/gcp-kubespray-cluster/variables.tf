@@ -279,6 +279,15 @@ variable "labels" {
 }
 
 # ---------------------------------------------------------------------------
+# Selective node deletion
+# ---------------------------------------------------------------------------
+variable "exclude_nodes" {
+  description = "List of GCP instance names to exclude (delete) from the cluster. Names must match the full instance name with prefix (e.g. k8s-master01, k8s-worker02, k8s-haproxy-1). Excluded nodes and their resources (VM, static IP, data disks) are destroyed while remaining nodes stay untouched."
+  type        = list(string)
+  default     = []
+}
+
+# ---------------------------------------------------------------------------
 # Custom firewall rules
 # ---------------------------------------------------------------------------
 # Each entry creates one google_compute_firewall resource that opens the

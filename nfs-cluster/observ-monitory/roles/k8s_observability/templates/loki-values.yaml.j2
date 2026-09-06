@@ -1,8 +1,18 @@
-# Loki Helm Chart Values (Configured for MinIO S3 Object Storage)
+# Loki Helm Chart Values
+# Flexible storage configuration with enable/disable toggles
+
+{% set l_sc = loki_storage.storage_class.enabled | default(false) %}
+{% set l_hp = loki_storage.host_path.enabled | default(false) %}
+{% set l_ed = loki_storage.empty_dir.enabled | default(false) %}
+{% set l_edm = loki_storage.empty_dir_memory.enabled | default(false) %}
+{% set loki_type = loki_storage_type | default('') %}
 
 loki:
   enabled: true
   isDefault: false
+  image:
+    repository: grafana/loki
+    tag: 2.9.8
   resources:
     requests:
       cpu: 100m
@@ -11,13 +21,49 @@ loki:
       cpu: 500m        # Safe CPU limit (burst up to 0.5 CPU)
       memory: 512Mi
 
-{% if loki_use_s3 | default(true) %}
+{% if l_sc or loki_type in ['storageClass', 'pvc'] %}
   persistence:
     enabled: true
-    storageClassName: "{{ k8s_decoupled_storage_class }}"
-    size: "{{ loki_storage_size }}"
+    {% set l_sc_name = loki_storage.storage_class.name | default(loki_storage_class | default(k8s_decoupled_storage_class | default(''))) %}
+    {% if l_sc_name | trim != '' %}
+    storageClassName: "{{ l_sc_name }}"
+    {% endif %}
+    size: "{{ loki_storage.storage_class.size | default(loki_storage_size | default('10Gi')) }}"
+{% else %}
+  persistence:
+    enabled: false
+  {% if l_hp or loki_type == 'hostPath' %}
+  extraVolumes:
+    - name: storage
+      hostPath:
+        path: "{{ loki_storage.host_path.path | default(loki_host_path | default('/var/lib/loki-data')) }}"
+        type: DirectoryOrCreate
+  extraVolumeMounts:
+    - name: storage
+      mountPath: /data
+  {% elif l_ed or loki_type == 'emptyDir' %}
+  extraVolumes:
+    - name: storage
+      emptyDir: {}
+  extraVolumeMounts:
+    - name: storage
+      mountPath: /data
+  {% elif l_edm or loki_type == 'emptyDirMemory' %}
+  extraVolumes:
+    - name: storage
+      emptyDir:
+        medium: Memory
+  extraVolumeMounts:
+    - name: storage
+      mountPath: /data
+  {% endif %}
+{% endif %}
 
+{% if loki_use_s3 | default(true) %}
   config:
+    limits_config:
+      volume_enabled: true
+
     schema_config:
       configs:
         - from: "2024-01-01"
@@ -42,10 +88,9 @@ loki:
         cache_ttl: 24h
         shared_store: s3
 {% else %}
-  persistence:
-    enabled: true
-    storageClassName: "{{ k8s_decoupled_storage_class }}"
-    size: "{{ loki_storage_size }}"
+  config:
+    limits_config:
+      volume_enabled: true
 {% endif %}
 
 promtail:

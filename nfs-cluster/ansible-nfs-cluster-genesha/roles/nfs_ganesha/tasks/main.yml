@@ -4,8 +4,6 @@
 # ==========================================
 # STEP 1: Install NFS-Ganesha packages
 # ==========================================
-# The Ceph repo was already added by the ceph role,
-# so the nfs-ganesha-ceph package will be found.
 - name: Install nfs-ganesha and nfs-ganesha-ceph
   package:
     name:
@@ -16,18 +14,17 @@
 # ==========================================
 # STEP 2: Create dedicated Ceph user for Ganesha (FIRST NODE ONLY)
 # ==========================================
-# We create a dedicated "client.ganesha" user instead of using "client.admin".
-# This limits Ganesha to only the permissions it needs (read/write to the data pool),
-# instead of giving it full admin access to destroy the entire Ceph cluster.
-- name: Create dedicated Ceph user for Ganesha
+- name: Create or get dedicated Ceph user keyring for Ganesha
+  command: ceph auth get-or-create client.ganesha -o /etc/ceph/ceph.client.ganesha.keyring
+  run_once: true
+  delegate_to: "{{ groups['ceph_nodes'][0] }}"
+
+- name: Ensure Ceph auth caps for client.ganesha
   command: >
-    ceph auth get-or-create client.ganesha
+    ceph auth caps client.ganesha
     mon 'allow r'
-    osd 'allow rw pool={{ ceph_pool_data }}'
+    osd 'allow rw pool={{ ceph_pool_data }}, allow rw pool={{ ceph_pool_metadata }}'
     mds 'allow *'
-    -o /etc/ceph/ceph.client.ganesha.keyring
-  args:
-    creates: /etc/ceph/ceph.client.ganesha.keyring
   run_once: true
   delegate_to: "{{ groups['ceph_nodes'][0] }}"
 
@@ -61,11 +58,19 @@
 
 - name: Set Ganesha key fact for all nodes
   set_fact:
-    ceph_ganesha_key: "{{ ganesha_key_result.stdout }}"
+    ceph_ganesha_key: "{{ hostvars[groups['ceph_nodes'][0]]['ganesha_key_result']['stdout'] }}"
 
 # ==========================================
 # STEP 5: Deploy NFS-Ganesha configuration
 # ==========================================
+- name: Ensure /etc/ganesha directory exists
+  ansible.builtin.file:
+    path: /etc/ganesha
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
 - name: Deploy NFS-Ganesha configuration
   template:
     src: ganesha.conf.j2
@@ -75,15 +80,46 @@
     mode: '0644'
   notify: restart nfs-ganesha
 
+- name: Ensure /var/run/ganesha directory exists
+  ansible.builtin.file:
+    path: /var/run/ganesha
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Deploy systemd tmpfiles for persistent /var/run/ganesha directory
+  ansible.builtin.copy:
+    dest: /etc/tmpfiles.d/nfs-ganesha.conf
+    content: "d /var/run/ganesha 0755 root root -\n"
+    mode: '0644'
+
+- name: Create systemd override directory for NFS-Ganesha
+  ansible.builtin.file:
+    path: /etc/systemd/system/nfs-ganesha.service.d
+    state: directory
+    mode: '0755'
+
+- name: Deploy systemd override for NFS-Ganesha (prevent DBus hangs & ensure pid directory)
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/nfs-ganesha.service.d/override.conf
+    content: |
+      [Service]
+      ExecStartPre=/bin/mkdir -p /var/run/ganesha
+      ExecStartPre=-/bin/rm -rf /var/lib/ganesha/v4_recov /var/lib/ganesha/v4_old /var/lib/nfs/ganesha/*
+      ExecStop=
+      ExecStop=/bin/pkill -9 ganesha.nfsd
+      TimeoutStopSec=5
+    mode: '0644'
+
 # ==========================================
-# STEP 6: Disable NFS-Ganesha from systemd
+# STEP 6: Ensure NFS-Ganesha systemd service is disabled locally
+# (Pacemaker HA will manage starting/stopping the daemon)
 # ==========================================
-# IMPORTANT: Pacemaker will start/stop the NFS-Ganesha service.
-# If both systemd AND Pacemaker try to manage the same service,
-# they will CONFLICT — causing random restarts and service flapping.
-# We disable it here so ONLY Pacemaker controls it.
-- name: Disable NFS-Ganesha from systemd (Pacemaker will manage it)
-  systemd:
+- name: Disable local systemd management of NFS-Ganesha
+  ansible.builtin.systemd:
     name: nfs-ganesha
     state: stopped
     enabled: no
+    daemon_reload: true
+  failed_when: false

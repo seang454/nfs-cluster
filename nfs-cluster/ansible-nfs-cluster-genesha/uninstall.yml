@@ -1,0 +1,76 @@
+---
+# ==========================================
+# UNINSTALL PLAYBOOK FOR HA CEPH + NFS-GANESHA CLUSTER
+# Completely teardown and remove all components installed by site.yml
+# ==========================================
+
+# ==========================================
+# PLAY 1: Clean up NFS Clients (Kubernetes nodes)
+# ==========================================
+- name: Uninstall NFS Client mounts and provisioner
+  hosts: nfs_clients
+  become: yes
+  tasks:
+    - name: Run nfs_client uninstall tasks
+      ansible.builtin.include_role:
+        name: nfs_client
+        tasks_from: uninstall
+
+# ==========================================
+# PLAY 2: Teardown Pacemaker / Corosync HA Cluster
+# ==========================================
+- name: Teardown Pacemaker and Corosync HA Cluster
+  hosts: ceph_nodes
+  become: yes
+  tasks:
+    - name: Run pacemaker_corosync uninstall tasks
+      ansible.builtin.include_role:
+        name: pacemaker_corosync
+        tasks_from: uninstall
+
+# ==========================================
+# PLAY 3: Remove NFS-Ganesha Gateways
+# ==========================================
+- name: Uninstall NFS-Ganesha Gateways
+  hosts: ceph_nodes
+  become: yes
+  tasks:
+    - name: Run nfs_ganesha uninstall tasks
+      ansible.builtin.include_role:
+        name: nfs_ganesha
+        tasks_from: uninstall
+
+# ==========================================
+# PLAY 4: Teardown Ceph Storage Cluster & Wipe Disks
+# ==========================================
+- name: Teardown Ceph Storage Cluster and wipe OSD disks
+  hosts: ceph_nodes
+  become: yes
+  tasks:
+    - name: Run ceph uninstall tasks
+      ansible.builtin.include_role:
+        name: ceph
+        tasks_from: uninstall
+
+# ==========================================
+# PLAY 5: Clean up Common node settings
+# ==========================================
+- name: Clean up Common node settings
+  hosts: all
+  become: yes
+  tasks:
+    - name: Run common uninstall tasks
+      ansible.builtin.include_role:
+        name: common
+        tasks_from: uninstall
+
+# ==========================================
+# PLAY 6: Automated Post-Teardown Cleanliness Verification
+# ==========================================
+- name: Verify Teardown & Uninstallation Cleanliness
+  hosts: all
+  become: yes
+  vars:
+    verify_mode: "uninstall"
+  roles:
+    - verify

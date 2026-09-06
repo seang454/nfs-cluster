@@ -40,6 +40,7 @@ module "kubespray_cluster" {
   nodeport_source_ranges          = var.nodeport_source_ranges
   network_tags                    = var.network_tags
   custom_firewall_rules           = var.custom_firewall_rules
+  exclude_nodes                   = var.exclude_nodes
 
   labels = {
     environment = "dev"

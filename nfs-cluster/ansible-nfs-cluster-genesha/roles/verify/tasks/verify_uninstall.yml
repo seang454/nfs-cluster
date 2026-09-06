@@ -1,0 +1,167 @@
+---
+# tasks file for verifying full HA Ceph + NFS-Ganesha uninstallation cleanliness
+
+# ==========================================
+# PHASE 1: Verify Kubernetes Storage Provisioner Uninstalled
+# ==========================================
+- name: Verify Kubernetes resources are completely removed (first client only)
+  block:
+    - name: Check nfs-client-provisioner Deployment is deleted
+      ansible.builtin.command: kubectl get deployment nfs-client-provisioner -n kube-system
+      register: k8s_dep_check
+      changed_when: false
+      failed_when: k8s_dep_check.rc == 0
+
+    - name: Check nfs-client StorageClass is deleted
+      ansible.builtin.command: "kubectl get storageclass {{ k8s_storage_class_name | default('nfs-client') }}"
+      register: k8s_sc_check
+      changed_when: false
+      failed_when: k8s_sc_check.rc == 0
+
+    - name: Verify temporary provisioner manifest file is deleted
+      ansible.builtin.stat:
+        path: /tmp/k8s-nfs-provisioner.yaml
+      register: stat_manifest
+      failed_when: stat_manifest.stat.exists
+  when: inventory_hostname == groups['nfs_clients'][0]
+
+# ==========================================
+# PHASE 2: Verify NFS Client Share Unmounted
+# ==========================================
+- name: Verify NFS share is unmounted on client nodes
+  block:
+    - name: Check mountpoint is unmounted
+      ansible.builtin.command: "mountpoint -q {{ nfs_mount_point }}"
+      register: mountpoint_check
+      changed_when: false
+      failed_when: mountpoint_check.rc == 0
+
+    - name: Check /etc/fstab entry is removed
+      ansible.builtin.command: "grep -E '{{ nfs_mount_point }}' /etc/fstab"
+      register: fstab_check
+      changed_when: false
+      failed_when: fstab_check.rc == 0
+
+    - name: Verify mount point directory is deleted
+      ansible.builtin.stat:
+        path: "{{ nfs_mount_point }}"
+      register: stat_mountdir
+      failed_when: stat_mountdir.stat.exists
+  when: inventory_hostname in groups['nfs_clients']
+
+# ==========================================
+# PHASE 3: Verify Pacemaker / Corosync HA Cluster Uninstalled
+# ==========================================
+- name: Verify Pacemaker and Corosync cluster state (ceph nodes)
+  block:
+    - name: Check pcs status command fails (cluster destroyed)
+      ansible.builtin.command: pcs status
+      register: pcs_check
+      changed_when: false
+      failed_when: pcs_check.rc == 0
+
+    - name: Check pcsd service is stopped
+      ansible.builtin.command: systemctl is-active pcsd
+      register: pcsd_check
+      changed_when: false
+      failed_when: pcsd_check.stdout == 'active'
+
+    - name: Stat Pacemaker directories
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /etc/corosync
+        - /var/lib/corosync
+        - /var/lib/pacemaker
+        - /etc/pacemaker
+      register: stat_pacemaker_dirs
+
+    - name: Verify Pacemaker directories are deleted
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists == false
+        fail_msg: "Pacemaker directory {{ item.item }} still exists!"
+      loop: "{{ stat_pacemaker_dirs.results }}"
+  when: inventory_hostname in groups['ceph_nodes']
+
+# ==========================================
+# PHASE 4: Verify NFS-Ganesha Gateway Uninstalled
+# ==========================================
+- name: Verify NFS-Ganesha service and files (ceph nodes)
+  block:
+    - name: Check nfs-ganesha service is stopped
+      ansible.builtin.command: systemctl is-active nfs-ganesha
+      register: ganesha_check
+      changed_when: false
+      failed_when: ganesha_check.stdout == 'active'
+
+    - name: Stat Ganesha files
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /etc/ganesha/ganesha.conf
+        - /etc/ganesha
+        - /etc/ceph/ceph.client.ganesha.keyring
+      register: stat_ganesha_files
+
+    - name: Verify Ganesha config and keyring files are deleted
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists == false
+        fail_msg: "Ganesha file {{ item.item }} still exists!"
+      loop: "{{ stat_ganesha_files.results }}"
+  when: inventory_hostname in groups['ceph_nodes']
+
+# ==========================================
+# PHASE 5: Verify Ceph Cluster & OSD Disks Cleaned
+# ==========================================
+- name: Verify Ceph cluster and disk state (ceph nodes)
+  block:
+    - name: Stat Ceph directories
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /etc/ceph
+        - /var/lib/ceph
+        - /usr/sbin/cephadm
+      register: stat_ceph_files
+
+    - name: Verify Ceph binary/config directories are deleted
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists == false
+        fail_msg: "Ceph path {{ item.item }} still exists!"
+      loop: "{{ stat_ceph_files.results }}"
+
+    - name: Verify zero Ceph Docker containers remain
+      ansible.builtin.shell: "docker ps -a --filter name=ceph -q"
+      register: ceph_containers
+      changed_when: false
+      failed_when: ceph_containers.stdout | trim != ''
+  when: inventory_hostname in groups['ceph_nodes']
+
+# ==========================================
+# PHASE 6: Verify Common Settings
+# ==========================================
+- name: Check chronyd service is stopped
+  ansible.builtin.command: systemctl is-active chronyd
+  register: chrony_check
+  changed_when: false
+  failed_when: chrony_check.stdout == 'active'
+
+# ==========================================
+# PHASE 7: Display Summary Report
+# ==========================================
+- name: Display Uninstallation Verification Report
+  ansible.builtin.debug:
+    msg:
+      - "======================================================================="
+      - "🎉 UNINSTALLATION VERIFICATION COMPLETE: ALL COMPONENTS 100% CLEAN!"
+      - "• Kubernetes Resources: DELETED (Deployment & StorageClass Removed)"
+      - "• Client Mount Points: UNMOUNTED & Directories Removed"
+      - "• Pacemaker / Corosync HA: DESTROYED & Config Directories Cleared"
+      - "• NFS-Ganesha Gateways: STOPPED & Keyrings/Configs Removed"
+      - "• Ceph Storage Cluster: PURGED (Daemons, Containers & Configs Wiped)"
+      - "• System Services: STOPPED & Cleaned"
+      - "======================================================================="
+  run_once: true

@@ -1,0 +1,40 @@
+---
+# tasks file for uninstalling nfs_ganesha role completely
+
+- name: Stop and disable NFS-Ganesha service
+  ansible.builtin.systemd:
+    name: nfs-ganesha
+    state: stopped
+    enabled: no
+  failed_when: false
+
+- name: Remove dedicated Ceph user for Ganesha (first node only)
+  ansible.builtin.command: ceph auth del client.ganesha
+  when: inventory_hostname == groups['ceph_nodes'][0]
+  failed_when: false
+
+- name: Remove Ganesha keyring file
+  ansible.builtin.file:
+    path: /etc/ceph/ceph.client.ganesha.keyring
+    state: absent
+  failed_when: false
+
+- name: Remove NFS-Ganesha configuration, log, and runtime directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/ganesha/ganesha.conf
+    - /etc/ganesha
+    - /var/log/ganesha
+    - /var/run/ganesha
+  failed_when: false
+
+- name: Uninstall nfs-ganesha packages
+  ansible.builtin.apt:
+    name:
+      - nfs-ganesha
+      - nfs-ganesha-ceph
+    state: absent
+    purge: true
+  failed_when: false

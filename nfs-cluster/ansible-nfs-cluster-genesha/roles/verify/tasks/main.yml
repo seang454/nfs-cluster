@@ -1,0 +1,10 @@
+---
+# Main entry point for verify role
+
+- name: Execute installation verification
+  ansible.builtin.include_tasks: verify_install.yml
+  when: verify_mode | default('install') == 'install'
+
+- name: Execute uninstallation verification
+  ansible.builtin.include_tasks: verify_uninstall.yml
+  when: verify_mode | default('install') == 'uninstall'

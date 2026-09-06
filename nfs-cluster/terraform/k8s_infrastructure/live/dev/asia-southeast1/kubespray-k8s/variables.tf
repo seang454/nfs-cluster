@@ -305,6 +305,15 @@ variable "ansible_ssh_extra_args" {
 }
 
 # ---------------------------------------------------------------------------
+# Selective node deletion
+# ---------------------------------------------------------------------------
+variable "exclude_nodes" {
+  description = "List of GCP instance names to exclude (delete) from the cluster. Names must match the full instance name with prefix (e.g. k8s-master01, k8s-worker02, k8s-haproxy-1)."
+  type        = list(string)
+  default     = []
+}
+
+# ---------------------------------------------------------------------------
 # Custom firewall rules
 # ---------------------------------------------------------------------------
 # Opens arbitrary ports on cluster VMs beyond the built-in SSH / API / internal
